@@ -14,7 +14,7 @@ await pg.exec(`create schema auth; create table auth.users(id uuid primary key, 
 create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
 create function auth.jwt() returns jsonb language sql stable as $$ select coalesce(nullif(current_setting('request.jwt.claims', true), ''), '{}')::jsonb $$;
 create role anon; create role authenticated;`);
-for (const f of ['migrations/20261027000001_schema.sql', 'migrations/20261027000002_functions.sql', 'migrations/20261027000003_hardening.sql', 'seed.sql']) await pg.exec(fs.readFileSync(R + f, 'utf8'));
+for (const f of ['migrations/20261027000001_schema.sql', 'migrations/20261027000002_functions.sql', 'migrations/20261027000003_hardening.sql', 'seed.sql', 'migrations/20261027000004_register_import.sql']) await pg.exec(fs.readFileSync(R + f, 'utf8'));
 const U = { kari:'11111111-1111-1111-1111-111111111111', jonas:'22222222-2222-2222-2222-222222222222', ola:'44444444-4444-4444-4444-444444444444', ny:'66666666-6666-6666-6666-666666666666' };
 for (const [n, id] of Object.entries(U)) await pg.query(`insert into auth.users values ($1,$2)`, [id, n + '@eksempel.no']);
 await pg.exec(`select grant_membership('kari@eksempel.no','froyanes','admin','Kari Nordvik'); select grant_membership('jonas@eksempel.no','froyanes','member','Jonas Vik'); select make_platform_admin('ola@eksempel.no','Ola Drift');`);
@@ -47,7 +47,7 @@ const errors = [];
 const dom = new JSDOM('<!doctype html><html><head></head><body>' + html + '</body></html>', {
   url: 'https://fartoykontakt-demo.netlify.app/#sok', runScripts: 'dangerously', pretendToBeVisual: true,
   beforeParse(w){ w.__ENV = { VITE_SUPABASE_URL: 'https://x.supabase.co', VITE_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_test' }; w.createClient = mockClient;
-    w.matchMedia = () => ({ matches:false }); w.scrollTo = () => {}; w.Element.prototype.scrollIntoView = () => {}; w.onerror = m => errors.push(m); w.fetch = async () => ({ ok:false }); }
+    w.matchMedia = () => ({ matches:false }); w.scrollTo = () => {}; w.TextDecoder = TextDecoder; w.Element.prototype.scrollIntoView = () => {}; w.onerror = m => errors.push(m); w.fetch = async () => ({ ok:false }); }
 });
 const w = dom.window, d = w.document, E = s => w.eval(s), app = () => d.getElementById('app');
 const go = async h => { w.location.hash = 'x'; await sleep(10); w.location.hash = h; await sleep(150); };
@@ -128,6 +128,15 @@ await login('ola'); await go('mine-fartoy');
 ok(app().querySelector('h1').textContent === 'Innmeldte feil' && app().textContent.includes('Lofotkyst'), 'Plattformadmin ser alle meldinger');
 const sel = d.getElementById('verify-months'); sel.value = '12'; sel.dispatchEvent(new w.Event('change', { bubbles:true })); await sleep(500);
 ok((await pg.query(`select verify_months from settings`)).rows[0].verify_months === 12, 'Innstilling lagret');
+
+// Import: tegnsett og kolonner
+const latin1 = Buffer.from('Registration mark;Radio call sign;Name;Length;Width;Engine power;Engine build year;Tonnage;Tonnage type;Build year;Measure date;Rebuild year;Registration date;Municipality name;IMO Number;name;Entity type;ID;Postal code;City\nN-56-B;LK7381;bjørg håkon;14.99;5.8;403;1992;-;OC;2001;2001-06-26;-;2012-04-17;bodø;-;a. jensen as;COMPANY;998076803;8003;bodø\nTR-2-NR;-;a-bas;6.8;2.4;82;1993;2;OC;1969;-;2002;2018-02-13;nærøysund;-;hagen arne;PERSON;***********;7960;salsbruket\n', 'latin1');
+w.__buf = new Uint8Array(latin1).buffer;
+const dec = E('decodeRegisterFile(window.__buf)');
+ok(dec.enc === 'Windows-1252' && dec.text.includes('bjørg håkon'), 'Windows-1252-fil leses med æøå');
+const mapped = E('mapRegisterRows(parseDelimited(decodeRegisterFile(window.__buf).text, ";"))');
+ok(mapped[0].name === 'Bjørg Håkon' && mapped[0].municipality === 'Bodø' && mapped[0].ownerName === 'A. Jensen AS' && mapped[0].length === '14,99 m' && mapped[0].id === 'n-56-b', 'Rader tolkes riktig: ' + JSON.stringify(mapped[0]).slice(0, 120));
+ok(mapped[1].ownerType === 'PERSON' && mapped[1].ownerName === '' && mapped[1].orgnr === '' && mapped[1].city === '', 'Personopplysninger sendes ikke videre');
 
 // Uten nett: katalog fra lokal kopi
 ok(!!w.localStorage.getItem('fartoykontakt-katalog-v1'), 'Katalogen er lagret lokalt for dårlig dekning');

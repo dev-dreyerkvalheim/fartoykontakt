@@ -1,8 +1,13 @@
 -- DEMODATA for Fartøykontakt. Alle fartøy, numre og e-postadresser er oppdiktet.
 -- Kjøres etter de to migrasjonsfilene. Kan kjøres på nytt: den sletter demodataene først.
 begin;
-delete from verifications; delete from changes; delete from reports; delete from number_history;
-delete from vessels; delete from companies;
+-- Sletter bare demodataene (ekte fartøy fra registeret røres ikke)
+delete from verifications where scope_id in ('froyanes','froyfjord','froyvik','bergholm','malmoy','nordsjobas','havbris','kvitholmen','solvtind','brattholm','vestbris','lofotkyst','gronnes','nordsjo');
+delete from changes where vessel_id in ('froyanes','froyfjord','froyvik','bergholm','malmoy','nordsjobas','havbris','kvitholmen','solvtind','brattholm','vestbris','lofotkyst','gronnes');
+delete from reports where vessel_id in ('froyanes','froyfjord','froyvik','bergholm','malmoy','nordsjobas','havbris','kvitholmen','solvtind','brattholm','vestbris','lofotkyst','gronnes');
+delete from number_history where vessel_id in ('froyanes','froyfjord','froyvik','bergholm','malmoy','nordsjobas','havbris','kvitholmen','solvtind','brattholm','vestbris','lofotkyst','gronnes');
+delete from vessels where id in ('froyanes','froyfjord','froyvik','bergholm','malmoy','nordsjobas','havbris','kvitholmen','solvtind','brattholm','vestbris','lofotkyst','gronnes');
+delete from companies where id in ('froyanes','bergholm','nordsjo','havbris','kvitholmen','solvtind','brattholm','vestbris','lofotkyst','gronnes');
 insert into companies(id,name,orgnr,phone,email,place) values ('froyanes','Frøyanes Rederi AS','000111222','+4700011200','post@froyanes-rederi.eksempel.no','Fosnavåg');
 insert into companies(id,name,orgnr,phone,email,place) values ('bergholm','Bergholm Fiskeri AS','000222333','+4700022100','post@bergholm.eksempel.no','Austevoll');
 insert into companies(id,name,orgnr,phone,email,place) values ('nordsjo','Nordsjø Pelagic AS','000333444','+4700033100','post@nordsjopelagic.eksempel.no','Karmøy');
@@ -84,3 +89,7 @@ insert into verifications(scope,scope_id,field,value,at,source) values ('company
 insert into verifications(scope,scope_id,field,value,at,source) values ('company','lofotkyst','phone','+4700088100','2026-09-11T12:00:00+01','demo');
 insert into verifications(scope,scope_id,field,value,at,source) values ('company','lofotkyst','email','post@lofotkyst.eksempel.no','2026-09-11T12:00:00+01','demo');
 commit;
+-- Demofartøy får merker som ikke finnes i registeret (samme som migrasjon 4)
+update vessels v set reg_nr = 'DEMO-' || n.rn, callsign = 'X' || substr(v.callsign, 2)
+from (select id, row_number() over (order by name) rn from vessels where reg_nr not like 'DEMO-%') n
+where v.id = n.id;

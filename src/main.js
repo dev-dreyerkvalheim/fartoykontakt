@@ -270,7 +270,7 @@ const api = {
      I prototypen gjøres det samme lokalt. JavaScript kjører én ting om gangen, så statussjekken hindrer dobbel godkjenning. */
   reportsFor(user){
     if (!user) return [];
-    if (user.role === 'platform') return db.reports.slice();
+    if (user.role === 'platform' || user.platform) return db.reports.slice();
     if (user.role !== 'admin') return [];
     return db.reports.filter(r => { const v = api.getVessel(r.vesselId); return v && v.companyId === user.companyId; });
   },
@@ -331,7 +331,7 @@ const api = {
 const HIST_LABEL = { confirmed:'Bekreftet som fartøyets nummer', unconfirmed:'Ikke bekreftet', reassigned:'Tatt i bruk av andre', rejected:'Ikke fartøyets nummer' };
 function fail(code){ const e = new Error(code); e.code = code; return e; }
 function isCompanyAdmin(user, v){ return !!user && !!v && user.role === 'admin' && user.companyId === v.companyId; }
-function canManage(user, v){ return !!user && !!v && (user.role === 'platform' || (user.role === 'admin' && user.companyId === v.companyId)); }
+function canManage(user, v){ return !!user && !!v && (user.role === 'platform' || user.platform || (user.role === 'admin' && user.companyId === v.companyId)); }
 function adminsOf(companyId){ return Object.values(db.users).filter(u => u.companyId === companyId && u.role === 'admin'); }
 /* Når rederiet selv retter eller bekrefter et felt, lukkes åpne meldinger om samme felt — med navn i loggen. */
 function closeReports(vesselId, field, byName, note){
@@ -520,7 +520,7 @@ function searchLocal(raw, extraHistory){
         consider(score, 'history', { hist:h, histStatus:st, exact });
       }
     }
-    const fields = [['name', v.name, 100], ['callsign', v.callsign, 96], ['regNr', v.regNr, 96], ['company', c.name, 80], ['port', v.homePort, 40]];
+    const fields = [['name', v.name, 100], ['callsign', v.callsign, 96], ['regNr', v.regNr, 96], ['company', c.id === 'privat' ? '' : c.name, 80], ['port', v.homePort, 40]];
     for (const [f, val, w] of fields){
       const vc = compact(val);
       if (vc.startsWith(qc)) consider(w, f);
@@ -669,6 +669,7 @@ function route(){
   if (h === 'registrer-rederi') return viewRegister();
   if (h === 'mine-fartoy') return viewDashboard();
   if (h === 'innmeldte-feil') return viewDashboard({ focusReports:true });
+  if (h === 'importer') return viewImport();
   if ((m = h.match(/^rediger-([a-z0-9-]+)$/))) return viewEdit(m[1]);
   return viewNotFound();
 }
@@ -789,8 +790,8 @@ function callButtons(number, who, opts = {}){
 function resultHead(v, c, extra){
   return `<div class="result-main">
       <h3 class="result-name"><a href="#fartoy-${esc(v.id)}">${esc(v.name)}</a></h3>
-      <p class="result-meta">${esc(c.name)} · <span class="num">${esc(v.regNr)}</span></p>
-      <div class="badges">${statusPill(v)}${newNumberPill(v)}</div>
+      <p class="result-meta">${esc(c.name)} · <span class="num">${esc(v.regNr)}</span>${v.homePort ? ` · ${esc(v.homePort)}` : ''}</p>
+      <div class="badges">${statusPill(v)}${newNumberPill(v)}${v.demo ? '<span class="pill pill-neutral">Demofartøy</span>' : ''}</div>
       ${extra || ''}
     </div>`;
 }
@@ -913,8 +914,12 @@ function viewVessel(id){
       <p class="hint" style="margin-top:10px">Er du fra rederiet? <a href="#logg-inn">Logg inn og legg inn kontaktinformasjon</a>.</p>
     </section>`}
 
-    <section class="card">
+    ${c.id === 'privat' ? `<section class="card">
+      <h2>Eier</h2>
+      <p class="hint" style="margin-top:6px">Fartøyet eies av en privatperson. Vi viser ikke navn på private eiere.</p>
+    </section>` : `<section class="card">
       <h2>Rederiet</h2>
+      ${c.status ? `<div class="notice notice-warn" style="margin-top:10px">${ICON.warn}<p>Enhetsregisteret: ${esc(c.status)}</p></div>` : ''}
       <div class="rows" style="margin-top:8px">
         <div class="row"><div class="row-main"><div class="k">Navn</div><div class="v">${esc(c.name)}</div></div></div>
         ${c.phone ? `<div class="row"><div class="row-main"><div class="k">Telefon ${tagFor('co.phone')}</div><a class="v num phone-link" href="${esc(telHref(c.phone))}" tabindex="-1">${esc(fmtPhone(c.phone))}</a></div>
@@ -923,18 +928,15 @@ function viewVessel(id){
           <div class="row-actions"><button type="button" class="btn btn-ghost btn-sm" data-copy="${esc(c.email)}" data-label="E-postadressen">${ICON.copy}Kopier</button></div></div>` : ''}
         <div class="row"><div class="row-main"><div class="k">Organisasjonsnummer</div><div class="v num">${esc(fmtOrg(c.orgnr))}</div></div></div>
       </div>
-    </section>
+    </section>`}
 
     <section class="card">
       <h2>Om fartøyet</h2>
       <dl class="facts">
-        <dt>Registreringsnummer</dt><dd>${esc(v.regNr)}</dd>
-        <dt>Kallesignal</dt><dd>${esc(v.callsign)}</dd>
-        <dt>Type</dt><dd>${esc(v.type)}</dd>
-        <dt>Lengde</dt><dd>${esc(v.length)}</dd>
-        <dt>Hjemmehavn</dt><dd>${esc(v.homePort)}</dd>
+        ${[['Registreringsmerke', v.regNr], ['Kallesignal', v.callsign], ['Type', v.type], ['Lengde', v.length], ['Byggeår', v.buildYear], ['IMO-nummer', v.imo], [v.demo ? 'Hjemmehavn' : 'Kommune', v.homePort]]
+          .filter(([, val]) => val).map(([k, val]) => `<dt>${k}</dt><dd>${esc(val)}</dd>`).join('')}
       </dl>
-      <p class="source">Fra fartøyregisteret. I prototypen er dette eksempeldata.</p>
+      <p class="source">${v.demo || !REMOTE ? 'Demofartøy med oppdiktede opplysninger.' : 'Fra Fiskeridirektoratets fartøyregister.'}</p>
     </section>
 
     <section class="card report-cta">
@@ -1209,9 +1211,10 @@ function viewDashboard(opts = {}){
       <ul class="vlist">${sortedVessels.map(v => vesselRow(v, u)).join('')}</ul>
     </section>` : ''}
 
-    ${isPlatform ? `<section class="dash-section" aria-labelledby="set-h">
-      <h2 id="set-h">Innstillinger</h2>
+    ${isPlatform || u.platform ? `<section class="dash-section" aria-labelledby="set-h">
+      <h2 id="set-h">${isPlatform ? 'Innstillinger' : 'Plattform'}</h2>
       <div class="card stack">
+        ${REMOTE ? `<div class="form-actions"><a class="btn btn-secondary" href="#importer">Importer fartøyregisteret</a></div>` : ''}
         <div class="field">
           <label for="verify-months">Hvor lenge gjelder en bekreftelse fra rederiet?</label>
           <select class="input" id="verify-months">${[3,6,12].map(n => `<option value="${n}" ${n === verifyMonths() ? 'selected' : ''}>${n} måneder</option>`).join('')}</select>
@@ -1406,7 +1409,7 @@ function renderReports(u){
     ${flash ? `<div class="notice notice-ok" role="status" style="margin-bottom:12px">${ICON.ok}<p>${flash}</p></div>` : ''}
     ${open.length ? groups.map(g => {
       const v = api.getVessel(g.vesselId);
-      const showCo = u.role === 'platform';
+      const showCo = u.role === 'platform' || u.platform;
       return `<div class="report-group">
         <h3 class="group-title">${esc(v.name)}${showCo ? ` <span class="hint">· ${esc(api.company(v.companyId).name)}</span>` : ''}${g.items.length > 1 ? ` <span class="hint">· ${g.items.length} meldinger</span>` : ''}</h3>
         ${g.items.map(r => reportCard(r, v, u)).join('')}
@@ -2055,6 +2058,167 @@ async function boot(){
   if (state.fromCache) document.getElementById('offline').hidden = false;
   startPolling();
   route();
+}
+
+/* =====================================================================
+   IMPORT AV FARTØYREGISTERET (plattformadministrator, bare med Supabase)
+   Filen leses i nettleseren, så æ/ø/å blir riktige uansett om Fiskeridirektoratet
+   leverer UTF-8 eller Windows-1252. Personnavn og fødselsnummer sendes aldri videre.
+   ===================================================================== */
+const ORG_SUFFIX = /\b(As|Asa|Ans|Da|Sa|Ks|Ba|Nuf|Iks)\b/g;
+function titleCase(s){
+  return String(s || '').trim().toLowerCase()
+    .replace(/(^|[\s\-.\/(&])(\p{L})/gu, (m, a, b) => a + b.toUpperCase())
+    .replace(ORG_SUFFIX, w => w.toUpperCase());
+}
+function vesselSlug(reg){
+  return String(reg || '').toLowerCase().replace(/æ/g, 'ae').replace(/ø/g, 'o').replace(/å/g, 'a')
+    .normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+}
+function decodeRegisterFile(buf){
+  try { return { text: new TextDecoder('utf-8', { fatal: true }).decode(buf), enc: 'UTF-8' }; }
+  catch(e){ return { text: new TextDecoder('windows-1252').decode(buf), enc: 'Windows-1252' }; }
+}
+function parseDelimited(text, sep){
+  const rows = []; let row = [], cur = '', q = false;
+  for (let i = 0; i < text.length; i++){
+    const ch = text[i];
+    if (q){ if (ch === '"'){ if (text[i+1] === '"'){ cur += '"'; i++; } else q = false; } else cur += ch; continue; }
+    if (ch === '"') q = true;
+    else if (ch === sep){ row.push(cur); cur = ''; }
+    else if (ch === '\n'){ row.push(cur.replace(/\r$/, '')); rows.push(row); row = []; cur = ''; }
+    else cur += ch;
+  }
+  if (cur !== '' || row.length){ row.push(cur.replace(/\r$/, '')); rows.push(row); }
+  return rows.filter(r => r.length > 1);
+}
+/* Kolonner i Fiskeridirektoratets eksport (engelsk eller norsk overskrift, samme rekkefølge) */
+function mapRegisterRows(rows){
+  const head = rows[0].map(h => h.trim().toLowerCase());
+  if (!/registration mark|registreringsmerke/.test(head[0]) || head.length < 20) throw fail('format');
+  const dash = v => (v || '').trim() === '-' ? '' : (v || '').trim();
+  const num = v => { const t = dash(v).replace(',', '.'); return t && !isNaN(Number(t)) ? t : ''; };
+  return rows.slice(1).map(r => {
+    const company = dash(r[16]).toUpperCase() === 'COMPANY';
+    const len = num(r[3]);
+    return {
+      id: vesselSlug(dash(r[0])),
+      regNr: dash(r[0]).toUpperCase(),
+      callsign: dash(r[1]).toUpperCase(),
+      name: titleCase(dash(r[2])),
+      length: len ? Number(len).toLocaleString('nb-NO', { maximumFractionDigits: 2 }) + ' m' : '',
+      width: num(r[4]),
+      enginePower: /^\d+$/.test(dash(r[5])) ? dash(r[5]) : '',
+      buildYear: /^\d{4}$/.test(dash(r[9])) ? dash(r[9]) : '',
+      registerDate: /^\d{4}-\d{2}-\d{2}$/.test(dash(r[12])) ? dash(r[12]) : '',
+      municipality: titleCase(dash(r[13])),
+      imo: dash(r[14]),
+      ownerType: company ? 'COMPANY' : 'PERSON',
+      // Personers navn, nummer og adresse sendes ikke til databasen
+      ownerName: company ? titleCase(dash(r[15])) : '',
+      orgnr: company ? dash(r[17]).replace(/\D/g, '') : '',
+      postalCode: company ? dash(r[18]) : '',
+      city: company ? titleCase(dash(r[19])) : ''
+    };
+  }).filter(x => x.regNr && x.name);
+}
+
+function viewImport(){
+  state.lastRoute = 'import';
+  const u = requireUser(); if (!u) return;
+  if (!REMOTE || !(u.platform || u.role === 'platform')){
+    app.innerHTML = `<header class="page-head"><h1 id="page-title" tabindex="-1">Ikke tilgang</h1></header><p class="hint">Bare plattformadministratorer kan importere fartøyregisteret.</p>`;
+    return;
+  }
+  const fileUrl = 'https://www.fiskeridir.no/registre/fartoyregisteret/fartoy-og-eieropplysninger';
+  app.innerHTML = `
+    <a class="back" href="#mine-fartoy">${ICON.back}Tilbake</a>
+    <header class="page-head">
+      <h1 id="page-title" tabindex="-1">Importer fartøyregisteret</h1>
+      <p class="sub">Last ned fartøylisten som CSV fra <a href="${fileUrl}" target="_blank" rel="noopener">Fiskeridirektoratet</a>, og velg filen her.</p>
+    </header>
+    <div class="card stack">
+      <div class="field">
+        <label for="reg-file">Fil fra Fiskeridirektoratet (CSV)</label>
+        <input class="input" id="reg-file" type="file" accept=".csv,text/csv,text/plain">
+        <p class="hint">Importen legger til nye fartøy og oppdaterer registerdata. Telefonnumre og e-post blir aldri endret. Fartøy eid av privatpersoner får «Privat eier», uten navn.</p>
+      </div>
+      <div id="imp-preview"></div>
+      <p class="err" id="imp-err" hidden></p>
+    </div>
+    <div class="card stack" style="margin-top:14px">
+      <h2>Navn fra Brønnøysundregistrene</h2>
+      <p class="hint">Henter offisielle navn og status (for eksempel konkurs eller slettet) for rederier som ikke er sjekket ennå.</p>
+      <div id="brreg-status"></div>
+      <div class="form-actions"><button type="button" class="btn btn-secondary" id="brreg-run">Hent navn fra Enhetsregisteret</button></div>
+    </div>`;
+  const prev = document.getElementById('imp-preview'), err = document.getElementById('imp-err');
+  const showErr = m => { err.innerHTML = ICON.warn + esc(m); err.hidden = false; };
+  document.getElementById('reg-file').addEventListener('change', async e => {
+    err.hidden = true; prev.innerHTML = '';
+    const f = e.target.files[0]; if (!f) return;
+    let rows, enc;
+    try {
+      const dec = decodeRegisterFile(await f.arrayBuffer()); enc = dec.enc;
+      rows = mapRegisterRows(parseDelimited(dec.text, dec.text.split('\n')[0].includes(';') ? ';' : ','));
+      if (dec.text.includes('�')) showErr('Filen mangler æ, ø og å (tegnene er allerede ødelagt). Last ned filen på nytt direkte fra Fiskeridirektoratet og velg den her uten å åpne og lagre den i et annet program.');
+    } catch(ex){ showErr('Fant ikke riktige kolonner. Bruk CSV-filen «fartøy og eieropplysninger» fra Fiskeridirektoratet.'); return; }
+    const companies = new Set(rows.filter(r => r.ownerType === 'COMPANY').map(r => r.orgnr)).size;
+    const persons = rows.filter(r => r.ownerType === 'PERSON').length;
+    prev.innerHTML = `<div class="notice notice-info">${ICON.info}<p><strong>${rows.length.toLocaleString('nb-NO')} fartøy klare</strong>
+      ${companies.toLocaleString('nb-NO')} rederier med organisasjonsnummer, ${persons} fartøy eid av privatpersoner. Tegnsett: ${enc}.
+      Eksempel: ${esc(rows.slice(0, 3).map(r => `${r.name} (${r.regNr}, ${r.municipality})`).join(', '))}.</p></div>
+      <div class="form-actions"><button type="button" class="btn btn-primary" id="imp-run">Importer ${rows.length.toLocaleString('nb-NO')} fartøy</button></div>
+      <div id="imp-progress"></div>`;
+    document.getElementById('imp-run').addEventListener('click', async ev => {
+      const b = ev.currentTarget; b.disabled = true;
+      const out = document.getElementById('imp-progress');
+      const tot = { new: 0, updated: 0, skipped: 0 };
+      try {
+        for (let i = 0; i < rows.length; i += 500){
+          out.innerHTML = `<p class="hint" role="status">Importerer ${Math.min(i + 500, rows.length).toLocaleString('nb-NO')} av ${rows.length.toLocaleString('nb-NO')} …</p>`;
+          const r = await remoteRpc('import_register', { p_rows: rows.slice(i, i + 500) });
+          tot.new += r.new; tot.updated += r.updated; tot.skipped += r.skipped;
+        }
+        await refreshAll();
+        out.innerHTML = `<div class="notice notice-ok">${ICON.ok}<p><strong>Ferdig</strong>${tot.new.toLocaleString('nb-NO')} nye fartøy, ${tot.updated.toLocaleString('nb-NO')} oppdatert${tot.skipped ? `, ${tot.skipped} hoppet over` : ''}. Søket finner dem nå.</p></div>`;
+        toast('Fartøyregisteret er importert');
+      } catch(ex){
+        b.disabled = false;
+        out.innerHTML = `<div class="notice notice-err">${ICON.warn}<p>Importen stoppet (${tot.new + tot.updated} fartøy lagret). ${ex.code === 'offline' ? 'Du er uten nett.' : ex.code === 'forbidden' ? 'Du har ikke tilgang.' : 'Prøv igjen. Det som allerede er lagret, blir bare oppdatert.'}</p></div>`;
+      }
+    });
+  });
+  document.getElementById('brreg-run').addEventListener('click', async ev => {
+    const b = ev.currentTarget; b.disabled = true;
+    const st = document.getElementById('brreg-status');
+    try {
+      const list = await remoteRpc('companies_to_check');
+      if (!list.length){ st.innerHTML = `<p class="hint">Alle rederier er allerede sjekket.</p>`; b.disabled = false; return; }
+      let done = 0, saved = 0;
+      for (let i = 0; i < list.length; i += 100){
+        const batch = list.slice(i, i + 100);
+        st.innerHTML = `<p class="hint" role="status">Henter ${Math.min(i + 100, list.length).toLocaleString('nb-NO')} av ${list.length.toLocaleString('nb-NO')} …</p>`;
+        const res = await fetch(`https://data.brreg.no/enhetsregisteret/api/enheter?organisasjonsnummer=${batch.join(',')}&size=100`);
+        if (!res.ok) throw fail('brreg');
+        const found = ((await res.json())._embedded || {}).enheter || [];
+        const byOrg = new Map(found.map(e => [e.organisasjonsnummer, e]));
+        const upd = batch.map(o => {
+          const e = byOrg.get(o);
+          if (!e) return { orgnr: o, name: '', place: '', status: 'Ikke funnet i Enhetsregisteret' };
+          const status = e.slettedato ? 'Slettet' : e.konkurs ? 'Konkurs' : e.underAvvikling || e.underTvangsavviklingEllerTvangsopplosning ? 'Under avvikling' : '';
+          return { orgnr: o, name: titleCase(e.navn), place: titleCase((e.forretningsadresse || e.postadresse || {}).poststed || ''), status };
+        });
+        saved += await remoteRpc('set_company_names', { p_rows: upd });
+        done += batch.length;
+      }
+      await refreshAll();
+      st.innerHTML = `<div class="notice notice-ok">${ICON.ok}<p><strong>Ferdig</strong>${saved.toLocaleString('nb-NO')} rederier oppdatert med navn fra Enhetsregisteret.</p></div>`;
+    } catch(ex){
+      st.innerHTML = `<div class="notice notice-err">${ICON.warn}<p>${ex.code === 'brreg' ? 'Fikk ikke svar fra Brønnøysundregistrene. Prøv igjen senere.' : 'Noe gikk galt. Prøv igjen; det som er hentet, er lagret.'}</p></div>`;
+    }
+    b.disabled = false;
+  });
 }
 
 boot();
