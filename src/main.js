@@ -621,7 +621,7 @@ function verifyBadge(vv){
     ${d ? `<span class="vdate">Sist bekreftet ${esc(d)}</span>` : ''}
     <div class="vexplain" id="vb-exp" hidden>
       <p>${esc(cfg.text)}</p>${d ? `<p>Sist bekreftet ${esc(d)}.</p>` : ''}
-      <p class="hint">Fartøykontakt har ikke selv ringt nummeret for å teste det. <span class="demo-tag">Demo</span> Bekreftelsene i prototypen er oppdiktet.</p>
+      <p class="hint">Fartøykontakt har ikke selv ringt nummeret for å teste det. ${REMOTE ? '' : '<span class="demo-tag">Demo</span> Bekreftelsene i prototypen er oppdiktet.'}</p>
     </div>
   </div>`;
 }
@@ -732,16 +732,26 @@ function viewHome(){
   runSearch(state.query, true);
 }
 
+/* Eksempler under søkefeltet: faste i demoen, ekte fartøy (som skifter hver dag) med Supabase */
+function exampleChips(){
+  let items;
+  if (!REMOTE) items = [['Frøyanes'], ['Bergholm'], ['LNSB'], ['+47 000 98 401', '(gammelt nummer)']];
+  else {
+    const pool = db.vessels.filter(v => v.callsign && v.name.length <= 14);
+    if (pool.length < 3) return '';
+    const day = Math.floor(Date.now() / 86400000);
+    const pick = k => pool[(day * 7919 + k * 104729) % pool.length];
+    items = [[pick(1).name], [pick(2).name], [pick(3).callsign, '(kallesignal)']];
+  }
+  return `<div class="examples"><span>Prøv:</span>
+    ${items.map(([q, note]) => `<button class="chip" type="button" data-try="${esc(q)}">${esc(q)}${note ? ` <span class="chip-note">${esc(note)}</span>` : ''}</button>`).join('')}
+  </div>`;
+}
 function renderIntro(){
   const recent = db.vessels.map(v => ({ v, h: lastSwitch(v) })).filter(x => x.h && daysSince(x.h.replacedAt) <= 60)
     .sort((a,b) => b.h.replacedAt.localeCompare(a.h.replacedAt)).map(x => x.v);
   return `<div class="intro">
-    <div class="examples"><span>Prøv:</span>
-      <button class="chip" type="button" data-try="Frøyanes">Frøyanes</button>
-      <button class="chip" type="button" data-try="Bergholm">Bergholm</button>
-      <button class="chip" type="button" data-try="LNSB">LNSB</button>
-      <button class="chip" type="button" data-try="+47 000 98 401">+47 000 98 401 <span class="chip-note">(gammelt nummer)</span></button>
-    </div>
+    ${exampleChips()}
     ${recent.length ? `<div><h2 class="section-title">Har byttet nummer nylig</h2><ul class="list">${recent.map(v => resultRow({ v, c: api.company(v.companyId), field:'name' })).join('')}</ul></div>` : ''}
   </div>`;
 }
@@ -2038,7 +2048,7 @@ async function boot(){
   document.getElementById('simulate-report')?.remove();
   document.getElementById('reset-demo')?.remove();
   const foot = document.querySelector('.site-foot p');
-  if (foot) foot.textContent = 'Fartøykontakt er under testing. Fartøy, telefonnumre og e-postadresser er foreløpig oppdiktet. Innlogging skjer med e-postlenke.';
+  if (foot) foot.textContent = 'Fartøykontakt er under testing. Fartøyene er hentet fra Fiskeridirektoratets fartøyregister. Telefonnumre og e-post legges inn og bekreftes av rederiene selv.';
   app.innerHTML = `<div style="padding:40px 0;text-align:center" role="status"><div class="spinner"></div><p class="hint" style="margin-top:12px">Henter fartøy …</p></div>`;
   try { await loadDirectory(); }
   catch(e){
