@@ -136,6 +136,7 @@ const dec = E('decodeRegisterFile(window.__buf)');
 ok(dec.enc === 'Windows-1252' && dec.text.includes('bjørg håkon'), 'Windows-1252-fil leses med æøå');
 const mapped = E('mapRegisterRows(parseDelimited(decodeRegisterFile(window.__buf).text, ";"))');
 ok(mapped[0].name === 'Bjørg Håkon' && mapped[0].municipality === 'Bodø' && mapped[0].ownerName === 'A. Jensen AS' && mapped[0].length === '14,99 m' && mapped[0].id === 'n-56-b', 'Rader tolkes riktig: ' + JSON.stringify(mapped[0]).slice(0, 120));
+ok(E('titleCase("vardøyfisk ii")') === 'Vardøyfisk II' && E('titleCase("m/s maja a/s")') === 'M/S Maja A/S' && E('titleCase("vi og dere")') === 'Vi Og Dere', 'Romertall og forkortelser');
 ok(mapped[1].ownerType === 'PERSON' && mapped[1].ownerName === '' && mapped[1].orgnr === '' && mapped[1].city === '', 'Personopplysninger sendes ikke videre');
 
 // Uten nett: katalog fra lokal kopi

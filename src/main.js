@@ -2069,7 +2069,8 @@ const ORG_SUFFIX = /\b(As|Asa|Ans|Da|Sa|Ks|Ba|Nuf|Iks)\b/g;
 function titleCase(s){
   return String(s || '').trim().toLowerCase()
     .replace(/(^|[\s\-.\/(&])(\p{L})/gu, (m, a, b) => a + b.toUpperCase())
-    .replace(ORG_SUFFIX, w => w.toUpperCase());
+    .replace(ORG_SUFFIX, w => w.toUpperCase())
+    .replace(/\s(i{2,3}|iv|vi{1,3}|ix|xi{1,2})$/i, w => w.toUpperCase());   // «Vardøyfisk Ii» → «Vardøyfisk II»
 }
 function vesselSlug(reg){
   return String(reg || '').toLowerCase().replace(/æ/g, 'ae').replace(/ø/g, 'o').replace(/å/g, 'a')
