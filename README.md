@@ -71,7 +71,7 @@ npm test                     # tester database og nettside (trenger ikke Supabas
 ```
 
 ## Viktig å vite i testperioden
-- **E-post:** Supabase sin innebygde e-post har lav grense for antall innloggingslenker per time. Skal mange teste samtidig, sett opp egen SMTP under *Authentication → Emails* (for eksempel Resend eller Postmark).
+- **E-post:** Innloggingslenker sendes via Resend fra domenet `dkdrift.no` (Supabase: *Authentication → Emails → SMTP Settings*, host `smtp.resend.com`, port 465, brukernavn `resend`). Domenet må være godkjent i Resend før e-post kan sendes.
 - **Gratisnivå:** Supabase pauser gratisprosjekter som ikke brukes på en stund. Åpne prosjektet i Supabase for å starte det igjen.
 - **Varsler** legges i tabellen `outbox`, men sendes ikke ennå. Neste steg er en Edge Function som sender dem.
 - **BankID** er ikke koblet til. Innlogging skjer med e-postlenke.

@@ -1965,7 +1965,7 @@ function viewLoginRemote(forRegister){
     const { error } = await sb.auth.signInWithOtp({ email, options: { emailRedirectTo: location.origin + location.pathname, shouldCreateUser: true } });
     if (error){
       btn.disabled = false; btn.textContent = 'Send innloggingslenke';
-      err.innerHTML = ICON.warn + esc(/rate|seconds/i.test(error.message) ? 'Det er sendt mange lenker på kort tid. Vent litt og prøv igjen.' : 'Vi fikk ikke sendt lenken. Sjekk adressen og prøv igjen.');
+      err.innerHTML = ICON.warn + esc(/rate|seconds/i.test(error.message) ? 'Det er sendt mange lenker på kort tid. Vent litt og prøv igjen.' : 'Vi fikk ikke sendt e-posten. Prøv igjen om litt.');
       err.hidden = false; return;
     }
     app.innerHTML = `<header class="page-head"><h1 id="page-title" tabindex="-1">Sjekk e-posten din</h1></header>
