@@ -78,6 +78,11 @@ npm test                     # tester database og nettside (trenger ikke Supabas
 - **BankID** er ikke koblet til. Innlogging skjer med e-postlenke.
 - **Ekte data:** Før ekte telefonnumre og personnavn legges inn trengs personvernerklæring og databehandleravtale med Supabase.
 
+## Design
+Siden følger Dreyer Kvalheims profilmanual (v1.0, 2026): mørk flate (kull `#141414`), salvie `#96AB9A` som eneste aksent, papir `#F5F5F3` til tekst.
+Syne til overskrifter og knapper, Poppins til brødtekst og telefonnumre, Playfair Display kursiv som aksent i forsideoverskriften.
+Alle farger, fonter og radier er definert som variabler øverst i `src/styles.css`. Fontene ligger i prosjektet (`@fontsource`), så siden henter ingenting fra Google.
+
 ## Sikkerhet i korte trekk
 - Nettleseren kan ikke skrive til tabellene direkte. Alle endringer går gjennom databasefunksjoner som sjekker rolle og rederi.
 - Innmeldte feil og forslag fra publikum publiseres aldri uten at en administrator godtar dem.

@@ -1,3 +1,10 @@
+// Profilfonter (Dreyer Kvalheim), lagret med siden: ingen kall til Google, og bare latinske tegn (inkl. æøå)
+import '@fontsource/syne/latin-600.css';
+import '@fontsource/syne/latin-700.css';
+import '@fontsource/poppins/latin-300.css';
+import '@fontsource/poppins/latin-400.css';
+import '@fontsource/poppins/latin-500.css';
+import '@fontsource/playfair-display/latin-400-italic.css';
 import './styles.css';
 import { createClient } from '@supabase/supabase-js';
 
@@ -692,7 +699,7 @@ function renderNav(){
 function viewHome(){
   app.innerHTML = `
     <section class="hero ${state.query ? 'is-compact' : ''}" id="hero">
-      <h1 id="page-title" tabindex="-1">Hvem skal du kontakte?</h1>
+      <h1 id="page-title" tabindex="-1">Hvem skal du <em class="accent">kontakte</em>?</h1>
       <p class="lede">Finn oppdatert kontaktinformasjon til norske fiskefartøy.</p>
       <form class="search" role="search" id="search-form" autocomplete="off">
         <label for="q" class="sr-only">Søk etter fartøy, rederi eller kallesignal</label>
@@ -1073,11 +1080,11 @@ function viewLogin(){
     <p class="hint" style="margin-top:18px;text-align:center">Er ikke rederiet ditt registrert? <a href="#registrer-rederi">Registrer rederiet</a></p>`;
   document.getElementById('bankid').addEventListener('click', async () => {
     const box = document.getElementById('login-box');
-    box.innerHTML = `<div style="text-align:center;padding:20px 0" role="status"><div class="spinner"></div><p style="margin-top:14px;font-weight:600">Venter på BankID …</p><p class="hint">Simulert innlogging</p></div>`;
+    box.innerHTML = `<div style="text-align:center;padding:20px 0" role="status"><div class="spinner"></div><p style="margin-top:14px;font-weight:500">Venter på BankID …</p><p class="hint">Simulert innlogging</p></div>`;
     await auth.startBankId();
     box.innerHTML = `
       <p class="notice notice-ok" style="margin:0">${ICON.ok}<span><strong>Identitet bekreftet (simulert)</strong></span></p>
-      <p style="font-weight:600">Velg hvem du vil logge inn som:</p>
+      <p style="font-weight:500">Velg hvem du vil logge inn som:</p>
       <button type="button" class="persona" data-user="kari"><span><strong>Kari Nordvik</strong><span>Frøyanes Rederi AS · Administrator</span></span>${ICON.back.replace('M15 18l-6-6 6-6','M9 18l6-6-6-6')}</button>
       <button type="button" class="persona" data-user="jonas"><span><strong>Jonas Vik</strong><span>Frøyanes Rederi AS · Medarbeider</span></span>${ICON.back.replace('M15 18l-6-6 6-6','M9 18l6-6-6-6')}</button>
       <button type="button" class="persona" data-user="ola"><span><strong>Ola Drift</strong><span>Fartøykontakt · Plattformadministrator</span></span>${ICON.back.replace('M15 18l-6-6 6-6','M9 18l6-6-6-6')}</button>
