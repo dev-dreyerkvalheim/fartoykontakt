@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="nb">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<meta name="theme-color" content="#12324B">
+<title>Fartøykontakt</title>
+<meta name="description" content="Finn oppdatert kontaktinformasjon til norske fiskefartøy.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+</head>
+<body>
+<div id="offline" class="offline" hidden role="status">Du er uten nett. Du ser opplysningene slik de var sist de ble lastet.</div>
+<header class="site">
+  <a class="brand" href="#sok" aria-label="Fartøykontakt, til forsiden">
+    <svg width="32" height="32" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="var(--primary)"/><circle cx="11" cy="21" r="2.4" fill="var(--on-primary)"/><path d="M11 14.5a6.5 6.5 0 0 1 6.5 6.5M11 9a12 12 0 0 1 12 12" fill="none" stroke="var(--on-primary)" stroke-width="2.4" stroke-linecap="round"/></svg>
+    Fartøykontakt
+  </a>
+  <nav class="nav" id="nav" aria-label="Hovedmeny"></nav>
+</header>
+<main id="app" tabindex="-1"></main>
+<footer class="site-foot">
+  <p>Fartøykontakt er en prototype. Alle fartøy, telefonnumre og e-postadresser her er oppdiktet. Ingen ekte BankID eller registeroppslag brukes.</p>
+  <p class="foot-demo"><button type="button" class="linkbtn" id="simulate-report">Demo: send en ny feilmelding om Frøyfjord</button> <button type="button" class="linkbtn" id="reset-demo">Tilbakestill demodata</button></p>
+</footer>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+<script type="module" src="/src/main.js"></script>
+</body>
+</html>
