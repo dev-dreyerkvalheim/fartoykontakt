@@ -2,7 +2,7 @@
 
 Oppdatert kontaktinformasjon til norske fiskefartøy. Søk → finn fartøy → ring.
 
-Dette er en testversjon. Alle fartøy, telefonnumre og e-postadresser i demodataene er oppdiktet.
+Dette er en testversjon. Fartøyene kommer fra Fiskeridirektoratets fartøyregister. Kontaktinformasjon legges inn av rederiene selv.
 
 ## Slik er prosjektet bygget
 
@@ -26,8 +26,9 @@ Siden har to modi:
    1. `supabase/migrations/20261027000001_schema.sql`
    2. `supabase/migrations/20261027000002_functions.sql`
    3. `supabase/migrations/20261027000003_hardening.sql`
-   4. `supabase/seed.sql`
-   5. `supabase/migrations/20261027000004_register_import.sql`
+   4. `supabase/migrations/20261027000004_register_import.sql`
+
+   `supabase/seed.sql` inneholder oppdiktede demofartøy og brukes bare i testene og ved lokal utvikling. Ikke kjør den i produksjon.
 3. Gå til **Authentication → URL Configuration**:
    - *Site URL*: adressen fra Netlify, for eksempel `https://fartoykontakt-demo.netlify.app`
    - *Redirect URLs*: legg til den samme adressen, og `http://localhost:5173` for lokal utvikling.
@@ -51,9 +52,9 @@ Siden har to modi:
 Be testeren logge inn én gang. Kjør så:
 ```sql
 -- roller: 'admin' (kan endre, godkjenne og bekrefte) eller 'member' (kan foreslå endringer)
-select grant_membership('tester@firma.no', 'froyanes', 'admin', 'Navn Navnesen');
+select grant_membership('tester@firma.no', 'org-998076803', 'admin', 'Navn Navnesen');
 ```
-Rederi-id-ene finner du i tabellen `companies`. Ekte rederier fra registeret har id `org-<organisasjonsnummer>`, for eksempel `org-998076803`. Søknader om tilgang ligger i tabellen `access_requests`.
+Rederier fra registeret har id `org-<organisasjonsnummer>`. Søknader om tilgang ligger i tabellen `access_requests`.
 
 ### 5. Importer fartøyregisteret
 1. Last ned fartøylisten som CSV fra [Fiskeridirektoratet](https://www.fiskeridir.no/registre/fartoyregisteret/fartoy-og-eieropplysninger). Ikke åpne og lagre den i Excel først.
