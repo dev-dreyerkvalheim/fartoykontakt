@@ -349,6 +349,10 @@ details.history summary{cursor:pointer;font-weight:600;min-height:44px;display:f
 /* Footer + toast */
 .site-foot{max-width:var(--col);margin:0 auto;padding-block:24px 40px;border-top:1px solid var(--border);color:var(--muted);font-size:14px;display:flex;flex-direction:column;gap:8px}
 .has-callbar .site-foot{padding-bottom:120px}
+/* Avsender: Dreyer Kvalheim AS (bytt ut .made-by-logo med logoen når den er klar) */
+.made-by{display:flex;align-items:center;gap:10px;margin-top:8px;padding-top:14px;border-top:1px solid var(--border);color:var(--muted)}
+.made-by strong{color:var(--text);font-weight:600}
+.made-by-logo{display:inline-grid;place-items:center;width:28px;height:28px;border-radius:6px;background:var(--primary);color:var(--on-primary);font-size:11px;font-weight:700;letter-spacing:.04em;flex:none}
 .toast{position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom, 0px));transform:translate(-50%, 20px);opacity:0;pointer-events:none;
   background:var(--text);color:var(--bg);padding:12px 18px;border-radius:10px;font-weight:600;font-size:15.5px;max-width:calc(100% - 32px);transition:opacity .2s, transform .2s;z-index:40;text-align:center}
 .toast.show{opacity:1;transform:translate(-50%,0)}
