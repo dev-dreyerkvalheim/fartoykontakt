@@ -25,7 +25,8 @@ Siden har to modi:
 2. Åpne **SQL Editor** og kjør disse filene i rekkefølge (lim inn innholdet og trykk *Run*):
    1. `supabase/migrations/20261027000001_schema.sql`
    2. `supabase/migrations/20261027000002_functions.sql`
-   3. `supabase/seed.sql`
+   3. `supabase/migrations/20261027000003_hardening.sql`
+   4. `supabase/seed.sql`
 3. Gå til **Authentication → URL Configuration**:
    - *Site URL*: adressen fra Netlify, for eksempel `https://fartoykontakt-demo.netlify.app`
    - *Redirect URLs*: legg til den samme adressen, og `http://localhost:5173` for lokal utvikling.

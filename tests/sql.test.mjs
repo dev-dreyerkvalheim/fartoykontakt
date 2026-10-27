@@ -15,6 +15,7 @@ create role anon; create role authenticated;
 `);
 await db.exec(fs.readFileSync(R + 'migrations/20261027000001_schema.sql', 'utf8'));
 await db.exec(fs.readFileSync(R + 'migrations/20261027000002_functions.sql', 'utf8'));
+await db.exec(fs.readFileSync(R + 'migrations/20261027000003_hardening.sql', 'utf8'));
 await db.exec(fs.readFileSync(R + 'seed.sql', 'utf8'));
 const U = { kari:'11111111-1111-1111-1111-111111111111', jonas:'22222222-2222-2222-2222-222222222222', per:'33333333-3333-3333-3333-333333333333', ola:'44444444-4444-4444-4444-444444444444', berg:'55555555-5555-5555-5555-555555555555' };
 for (const [n, id] of Object.entries(U)) await db.query(`insert into auth.users values ($1, $2)`, [id, n + '@eksempel.no']);
@@ -137,8 +138,13 @@ await as('kari'); ok(!(await call(`select set_number_status($1,'confirmed')`, [h
 await db.exec(`grant usage on schema public to anon, authenticated; grant select on all tables in schema public to anon, authenticated;`);
 await as(null); await db.exec(`set role anon`);
 ok((await db.query(`select count(*)::int n from verifications`)).rows[0].n === 0, 'RLS: anon kan ikke lese bekreftelser direkte');
-ok((await db.query(`select count(*)::int n from reports`)).rows[0].n === 0, 'RLS: anon kan ikke lese meldinger');
-ok((await db.query(`select count(*)::int n from number_history`)).rows[0].n === 0, 'RLS: anon kan ikke lese nummerhistorikk');
+let rr = ''; try { rr = (await db.query(`select count(*)::int n from reports`)).rows[0].n; } catch (e) { rr = 'nektet'; }
+ok(rr === 0 || rr === 'nektet', 'RLS: anon kan ikke lese meldinger (' + rr + ')');
+let fx = ''; try { await db.query(`select verify_vessel('froyanes', '{}'::jsonb)`); } catch (e) { fx = e.message; }
+ok(/permission denied/.test(fx), 'anon kan ikke kalle funksjoner som krever innlogging');
+let nh = ''; try { nh = (await db.query(`select count(*)::int n from number_history`)).rows[0].n; } catch (e) { nh = 'nektet'; }
+ok(nh === 0 || nh === 'nektet', 'RLS: anon kan ikke lese nummerhistorikk (' + nh + ')');
+ok((await db.query(`select jsonb_array_length(get_directory()->'vessels') n`)).rows[0].n === 13, 'anon kan hente katalogen');
 ok((await db.query(`select count(*)::int n from vessels`)).rows[0].n === 13, 'RLS: anon kan lese fartøy');
 let w = ''; try { await db.query(`update vessels set bridge_phone='+4799999999' where id='froyanes'`); } catch (e) { w = e.message; }
 ok((await db.query(`select bridge_phone from vessels where id='froyanes'`)).rows[0].bridge_phone !== '+4799999999', 'RLS: anon kan ikke endre fartøy (' + (w || '0 rader') + ')');

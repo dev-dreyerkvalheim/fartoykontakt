@@ -14,7 +14,7 @@ await pg.exec(`create schema auth; create table auth.users(id uuid primary key, 
 create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
 create function auth.jwt() returns jsonb language sql stable as $$ select coalesce(nullif(current_setting('request.jwt.claims', true), ''), '{}')::jsonb $$;
 create role anon; create role authenticated;`);
-for (const f of ['migrations/20261027000001_schema.sql', 'migrations/20261027000002_functions.sql', 'seed.sql']) await pg.exec(fs.readFileSync(R + f, 'utf8'));
+for (const f of ['migrations/20261027000001_schema.sql', 'migrations/20261027000002_functions.sql', 'migrations/20261027000003_hardening.sql', 'seed.sql']) await pg.exec(fs.readFileSync(R + f, 'utf8'));
 const U = { kari:'11111111-1111-1111-1111-111111111111', jonas:'22222222-2222-2222-2222-222222222222', ola:'44444444-4444-4444-4444-444444444444', ny:'66666666-6666-6666-6666-666666666666' };
 for (const [n, id] of Object.entries(U)) await pg.query(`insert into auth.users values ($1,$2)`, [id, n + '@eksempel.no']);
 await pg.exec(`select grant_membership('kari@eksempel.no','froyanes','admin','Kari Nordvik'); select grant_membership('jonas@eksempel.no','froyanes','member','Jonas Vik'); select make_platform_admin('ola@eksempel.no','Ola Drift');`);
