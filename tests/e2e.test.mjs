@@ -195,6 +195,10 @@ await go('fartoy-fd-0020010149');
 ok(app().textContent.includes('Kontaktinformasjon er ikke registrert ennå.'), 'Fartøy uten kontaktinfo: «Kontaktinformasjon er ikke registrert ennå.»');
 ok(app().textContent.includes('Kilde for fartøyopplysninger: Fiskeridirektoratet') && !d.getElementById('source-note').hidden, 'Kilde oppgitt på profilen og nederst på siden');
 ok(app().textContent.includes('Ålesund') && app().textContent.includes('M-777-HØ'), 'Registeropplysninger vises');
+await pg.query(`update vessels set email='lille.skjaer@eksempel.no' where id='fd-0020010150'`);
+await go('fartoy-fd-0020010150'); await sleep(300);
+ok(app().textContent.includes('lille.skjaer@eksempel.no') && !app().textContent.includes('Kontaktinformasjon er ikke registrert ennå.'), 'Fartøy med bare e-post viser e-posten');
+await go('fartoy-fd-0020010149');
 
 // Krev fartøyet: innlogging → søknad med fartøyet fylt inn. Gir ikke tilgang alene.
 app().querySelector('a[href="#be-om-tilgang-fd-0020010149"]').click(); await sleep(300);

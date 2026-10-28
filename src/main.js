@@ -953,6 +953,12 @@ function viewVessel(id){
       <div class="call-actions">${callButtons(v.bridgePhone, v.name, { label:'Ring broen' })}</div>
       ${shownPrev ? `<p class="prev-note">Fartøyet byttet nummer ${esc(fmtDate(shownPrev.replacedAt))}. Det gamle nummeret <s class="num">${esc(fmtPhone(shownPrev.number))}</s> er ikke lenger i bruk.</p>` : ''}
       ${contactRows.length ? `<div class="rows" style="margin-top:12px">${contactRows.join('')}</div>` : ''}
+    </section>` : contactRows.length ? `
+    <section class="card" aria-labelledby="contact-h">
+      ${verifyBadge(vv)}
+      <h2 id="contact-h">Kontakt fartøyet</h2>
+      <p class="hint" style="margin-top:6px">Telefon til broen er ikke oppgitt.</p>
+      <div class="rows" style="margin-top:12px">${contactRows.join('')}</div>
     </section>` : `
     <section class="card no-contact">
       <h2>Kontaktinformasjon er ikke registrert ennå.</h2>
