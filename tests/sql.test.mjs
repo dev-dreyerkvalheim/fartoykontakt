@@ -20,6 +20,7 @@ await db.exec(fs.readFileSync(R + 'migrations/20261027000003_hardening.sql', 'ut
 await db.exec(fs.readFileSync(R + 'migrations/20261027000004_register_import.sql', 'utf8'));
 await db.exec(fs.readFileSync(R + 'migrations/20261028000005_fiskeridir_sync.sql', 'utf8'));
 await db.exec(fs.readFileSync(R + 'migrations/20261028000007_registry_perf.sql', 'utf8'));
+await db.exec(fs.readFileSync(R + 'migrations/20261028000008_acting_role.sql', 'utf8'));
 await db.exec(fs.readFileSync(R + 'seed.sql', 'utf8'));
 const U = { kari:'11111111-1111-1111-1111-111111111111', jonas:'22222222-2222-2222-2222-222222222222', per:'33333333-3333-3333-3333-333333333333', ola:'44444444-4444-4444-4444-444444444444', berg:'55555555-5555-5555-5555-555555555555' };
 for (const [n, id] of Object.entries(U)) await db.query(`insert into auth.users values ($1, $2)`, [id, n + '@eksempel.no']);
@@ -162,10 +163,49 @@ const dir2 = (await one(`select get_directory() d`)).d;
 ok(dir2.vessels.find(v => v.regNr === 'N-56-B').homePort === 'Bodø' && dir2.vessels.find(v => v.regNr === 'DEMO-1').demo === true, 'Katalogen viser kommune og demomerke');
 await as('kari'); ok((await one(`select my_context() c`)).c.platform === false, 'my_context: platform-flagg');
 
+// Rollevelger: plattformadministrator som også er administrator i et rederi
+await as(null); await call(`select grant_membership('ola@eksempel.no','froyanes','admin','Ola Drift')`);
+await as('ola');
+let oc = (await one(`select my_context() c`)).c;
+ok(oc.role === 'platform' && oc.canPlatform === true && oc.roles.length === 1 && oc.roles[0].companyId === 'froyanes', 'Rolle: plattformadmin med rederi starter som plattformadministrator');
+ok((await call(`select verify_vessel('froyvik', $1::jsonb)`, [JSON.stringify(await exp('froyvik'))])).err === 'forbidden', 'Rolle: kan ikke bekrefte som plattformadministrator selv med medlemskap');
+ok((await call(`select submit_change('froyvik', '[]'::jsonb)`)).err === 'forbidden', 'Rolle: kan ikke endre som rederi uten å velge rederiet');
+const verBefore = (await one(`select count(*)::int n from verifications`)).n;
+await as(null); const rPlat = (await one(`select submit_report('froyvik','email','Feil e-post','plat@eksempel.no','','') id`)).id;
+await as('ola'); const ex1 = await exp('froyvik');
+const ar = (await call(`select accept_report($1, 'plat@eksempel.no', $2) r`, [rPlat, ex1.email])).rows[0].r;
+ok(ar.verified === false && (await one(`select count(*)::int n from verifications`)).n === verBefore, 'Rolle: retting som plattformadministrator gir ikke «Bekreftet av rederiet»');
+ok((await one(`select resolved_by_name n from reports where id=$1`, [rPlat])).n === 'Ola Drift (plattformadministrator)', 'Rolle: loggen viser plattformadministrator');
+ok((await call(`select set_acting_role('bergholm')`)).err === 'forbidden', 'Rolle: kan ikke velge et rederi man ikke er med i');
+oc = (await one(`select set_acting_role('froyanes') c`)).c;
+ok(oc.role === 'admin' && oc.companyId === 'froyanes' && oc.platform === false && oc.canPlatform === true, 'Rolle: bytter til rederiet');
+ok((await one(`select my_context() c`)).c.companyId === 'froyanes', 'Rolle: valget huskes på serveren');
+const ad8 = (await one(`select get_admin_data() a`)).a;
+ok(ad8.users.some(x => x.name === 'Kari Nordvik') && ad8.changes.length > 0, 'Rolle: admindata for rederiet');
+ok(!ad8.reports.some(r => r.vesselId === 'bergholm'), 'Rolle: ser ikke andre rederiers meldinger som rederi');
+const vb = (await call(`select verify_vessel('froyvik', $1::jsonb) v`, [JSON.stringify(await exp('froyvik'))]));
+ok(!vb.err && (await one(`select count(*)::int n from verifications`)).n > verBefore, 'Rolle: kan bekrefte når rederiet er valgt');
+ok((await one(`select by_name from changes where vessel_id='froyvik' and field='confirm' order by at desc limit 1`)).by_name === 'Ola Drift', 'Rolle: bekreftelsen logges med navnet i rederiet');
+ok((await call(`select verify_vessel('bergholm', $1::jsonb)`, [JSON.stringify(await exp('bergholm'))])).err === 'forbidden', 'Rolle: rederirollen gjelder bare eget rederi');
+ok(!(await call(`select registry_overview()`)).err, 'Rolle: plattformfunksjoner virker fortsatt');
+oc = (await one(`select set_acting_role(null) c`)).c;
+ok(oc.role === 'platform', 'Rolle: tilbake til plattformadministrator');
+ok((await call(`select verify_vessel('froyvik', $1::jsonb)`, [JSON.stringify(await exp('froyvik'))])).err === 'forbidden', 'Rolle: kan ikke bekrefte etter bytte tilbake');
+await as('kari');
+ok((await call(`select set_acting_role(null)`)).err === 'forbidden', 'Rolle: rederiadmin kan ikke gjøre seg til plattformadministrator');
+const kc = (await one(`select my_context() c`)).c;
+ok(kc.role === 'admin' && kc.canPlatform === false && kc.roles.length === 1, 'Rolle: vanlige rederibrukere er uendret');
+ok(!(await call(`select verify_vessel('froyvik', $1::jsonb)`, [JSON.stringify(await exp('froyvik'))])).err, 'Rolle: Kari kan fortsatt bekrefte');
+await as(null); await db.query(`delete from memberships where user_id=$1`, [U.ola]); await db.query(`delete from acting_roles`);
+await as('ola'); ok((await one(`select my_context() c`)).c.role === 'platform', 'Rolle: plattformadmin uten rederi som før');
+
+await db.query(`insert into acting_roles(user_id, company_id) values ($1, null)`, [U.ola]);
 // RLS: direkte tabellesing som anon
 await db.exec(`grant usage on schema public to anon, authenticated; grant select on all tables in schema public to anon, authenticated;`);
 await as(null); await db.exec(`set role anon`);
 ok((await db.query(`select count(*)::int n from verifications`)).rows[0].n === 0, 'RLS: anon kan ikke lese bekreftelser direkte');
+ok((await db.query(`select count(*)::int n from acting_roles`)).rows[0].n === 0, 'RLS: anon kan ikke lese rollevalg');
+
 let rr = ''; try { rr = (await db.query(`select count(*)::int n from reports`)).rows[0].n; } catch (e) { rr = 'nektet'; }
 ok(rr === 0 || rr === 'nektet', 'RLS: anon kan ikke lese meldinger (' + rr + ')');
 let fx = ''; try { await db.query(`select verify_vessel('froyanes', '{}'::jsonb)`); } catch (e) { fx = e.message; }

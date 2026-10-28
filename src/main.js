@@ -1242,6 +1242,7 @@ function viewDashboard(opts = {}){
       <p class="sub">${isPlatform ? 'Fartøykontakt · alle rederier' : `${esc(co.name)} · Org.nr. <span class="num">${esc(fmtOrg(co.orgnr))}</span>`}</p>
       <div class="who"><span>Logget inn som <strong style="color:var(--text)">${esc(u.name)}</strong>, ${roleName}${REMOTE ? '' : ' <span class="demo-tag">Demo</span>'}</span>
         <button type="button" class="btn btn-ghost btn-sm" id="logout">Logg ut</button></div>
+      ${roleSwitcher(u)}
       ${open && !isPlatform ? `<a class="alert-link" href="#innmeldte-feil">${ICON.bell}${open === 1 ? '1 innmeldt feil' : open + ' innmeldte feil'}</a>` : ''}
     </header>
 
@@ -1293,6 +1294,7 @@ function viewDashboard(opts = {}){
     </section>` : ''}`;
 
   document.getElementById('logout').addEventListener('click', () => { auth.signOut(); toast('Du er logget ut'); go('sok'); });
+  bindRoleSwitcher();
   app.querySelectorAll('[data-approve],[data-reject-change]').forEach(b => b.addEventListener('click', async () => {
     const approve = !!b.dataset.approve; b.disabled = true;
     try { await api.decide(b.dataset.approve || b.dataset.rejectChange, approve, u); toast(approve ? 'Godkjent. Det nye nummeret vises nå.' : 'Endringen er avvist'); viewDashboard(); }
@@ -1311,6 +1313,44 @@ function viewDashboard(opts = {}){
   if (opts.focusReports){
     setTimeout(() => { const sec = document.getElementById('innmeldte-feil'); if (sec){ sec.scrollIntoView({ block:'start' }); sec.focus({ preventScroll:true }); } }, 0);
   }
+}
+
+/* Rollevelger for personer med flere roller (plattformadministrator og/eller flere rederier).
+   Valget lagres og sjekkes i databasen. Bare som rederi kan man bekrefte kontaktinformasjon. */
+function roleChoices(u){
+  if (!u || !Array.isArray(u.roles)) return [];
+  const list = u.canPlatform ? [{ value:'', label:'Plattformadministrator (Fartøykontakt)' }] : [];
+  for (const r of u.roles) list.push({ value: r.companyId, label: `${r.companyName} · ${r.role === 'admin' ? 'administrator' : 'medarbeider'}` });
+  return list;
+}
+function roleSwitcher(u){
+  const list = roleChoices(u);
+  if (list.length < 2) return '';
+  const cur = u.role === 'platform' ? '' : u.companyId;
+  return `<div class="role-switch">
+    <label for="role-switch">Du jobber som</label>
+    <select class="input" id="role-switch">${list.map(o => `<option value="${esc(o.value)}" ${o.value === cur ? 'selected' : ''}>${esc(o.label)}</option>`).join('')}</select>
+    <p class="hint">${u.role === 'platform'
+      ? 'Det du endrer som plattformadministrator, blir ikke merket «Bekreftet av rederiet». Velg rederiet for å bekrefte kontaktinformasjon.'
+      : 'Det du gjør nå, lagres som gjort av rederiet.' + (u.canPlatform ? ' Bytt til plattformadministrator for fartøyregisteret og innmeldte feil fra alle rederier.' : '')}</p>
+  </div>`;
+}
+function bindRoleSwitcher(){
+  const sel = document.getElementById('role-switch');
+  if (!sel) return;
+  sel.addEventListener('change', async () => {
+    sel.disabled = true;
+    try {
+      await api.setActingRole(sel.value || null);
+      const u = auth.current();
+      toast(u.role === 'platform' ? 'Du jobber nå som plattformadministrator' : `Du jobber nå som ${api.company(u.companyId)?.name || 'rederiet'}`);
+      viewDashboard();
+    } catch(ex){
+      sel.disabled = false;
+      toast(ex.code === 'offline' ? 'Du er uten nett. Prøv igjen.' : 'Kunne ikke bytte rolle.');
+      viewDashboard();
+    }
+  });
 }
 
 /* =====================================================================
@@ -2051,6 +2091,7 @@ function installRemote(){
   };
   api.rejectReport = async (reportId, reason) => { await remoteRpc('reject_report', { p_report: reportId, p_reason: reason || '' }); await refreshAll(); };
   api.setNumberStatus = async (historyId, status) => { await remoteRpc('set_number_status', { p_history: historyId, p_status: status }); await refreshAll(); };
+  api.setActingRole = async companyId => { await remoteRpc('set_acting_role', { p_company: companyId }); await refreshAll(); };
   api.setVerifyMonths = async months => { await remoteRpc('set_verify_months', { p_months: Number(months) }); await refreshAll(); };
 
   auth.signOut = () => {
@@ -2241,7 +2282,9 @@ async function viewRegistry(){
   const u = requireUser(); if (!u) return;
   if (location.hash === '#importer') history.replaceState(null, '', '#fartoyregister');
   if (!REMOTE || !(u.platform || u.role === 'platform')){
-    app.innerHTML = `<header class="page-head"><h1 id="page-title" tabindex="-1">Ikke tilgang</h1></header><p class="hint">Bare plattformadministratorer har tilgang til fartøyregisteret.</p>`;
+    app.innerHTML = `<header class="page-head"><h1 id="page-title" tabindex="-1">Ikke tilgang</h1></header><p class="hint">${u.canPlatform
+      ? 'Du jobber nå som rederi. Bytt til plattformadministrator under <a href="#mine-fartoy">Mine fartøy</a> for å åpne fartøyregisteret.'
+      : 'Bare plattformadministratorer har tilgang til fartøyregisteret.'}</p>`;
     return;
   }
   const first = !app.querySelector('#reg-root');

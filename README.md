@@ -31,6 +31,7 @@ Siden har to modi:
    5. `supabase/migrations/20261028000005_fiskeridir_sync.sql`
    6. `supabase/migrations/20261028000006_registry_schedule.sql` (nattlig kjøring; krever pg_net, pg_cron og Vault. Endre adressen til Edge Function i filen hvis prosjektet har en annen URL.)
    7. `supabase/migrations/20261028000007_registry_perf.sql`
+   8. `supabase/migrations/20261028000008_acting_role.sql` (rollevelger)
 
    `supabase/seed.sql` inneholder oppdiktede demofartøy og brukes bare i testene og ved lokal utvikling. Ikke kjør den i produksjon.
 3. Gå til **Authentication → URL Configuration**:
@@ -59,6 +60,13 @@ Be testeren logge inn én gang. Kjør så:
 select grant_membership('tester@firma.no', 'org-998076803', 'admin', 'Navn Navnesen');
 ```
 Rederier fra registeret har id `org-<organisasjonsnummer>`. Søknader om tilgang ligger i tabellen `access_requests`.
+
+### 5. Plattformadministrator som også er med i et rederi
+En plattformadministrator kan også få tilgang til et rederi med `grant_membership`. Da vises **«Du jobber som»** øverst på *Mine fartøy*:
+- Som **plattformadministrator** (standard): fartøyregisteret og innmeldte feil fra alle rederier. Det du retter her, blir aldri merket «Bekreftet av rederiet».
+- Som **rederiet**: samme rettigheter som andre administratorer i rederiet, også «Bekreft kontaktinformasjon». Rettighetene i rederiet gjelder bare mens rederiet er valgt.
+
+Valget lagres i databasen (`acting_roles`) og sjekkes der, ikke i nettleseren. Loggen viser rollen: «Navn (plattformadministrator)» eller navnet i rederiet.
 
 ### 5. Fartøyregisteret (Fiskeridirektoratet)
 Fartøyene hentes fra Fiskeridirektoratets åpne API (`https://api.fiskeridir.no/vessel-api/api/v1/vessels`, lisens [NLOD](https://data.norge.no/nlod/no/2.0)).

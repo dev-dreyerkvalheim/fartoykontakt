@@ -232,6 +232,9 @@ fieldset{border:0;margin:0;padding:0;min-width:0}
 
 /* Dashboard */
 .who{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;color:var(--muted);font-size:15px;margin-top:8px}
+.role-switch{margin-top:14px;padding:12px 14px;border:1px solid var(--border);border-radius:var(--r);background:var(--surface);display:grid;gap:6px;max-width:520px}
+.role-switch label{font-size:14px;color:var(--muted)}
+.role-switch .hint{margin:0}
 .vlist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px}
 .vrow{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:16px 18px;display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap}
 .vrow h3{font-size:19px}
