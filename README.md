@@ -30,6 +30,7 @@ Siden har to modi:
    4. `supabase/migrations/20261027000004_register_import.sql`
    5. `supabase/migrations/20261028000005_fiskeridir_sync.sql`
    6. `supabase/migrations/20261028000006_registry_schedule.sql` (nattlig kjøring; krever pg_net, pg_cron og Vault. Endre adressen til Edge Function i filen hvis prosjektet har en annen URL.)
+   7. `supabase/migrations/20261028000007_registry_perf.sql`
 
    `supabase/seed.sql` inneholder oppdiktede demofartøy og brukes bare i testene og ved lokal utvikling. Ikke kjør den i produksjon.
 3. Gå til **Authentication → URL Configuration**:
