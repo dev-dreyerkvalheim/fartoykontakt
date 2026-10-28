@@ -184,9 +184,9 @@ main{max-width:var(--col);margin:0 auto;padding-block:8px 64px;outline:none}
 .row .v{font-size:17px;font-weight:500;overflow-wrap:anywhere}
 .row .v.num{font-weight:500;font-size:18px}
 .row-actions{display:flex;gap:6px}
-dl.facts{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.4fr);gap:10px 16px;margin:12px 0 0}
+dl.facts{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:10px 20px;margin:12px 0 0}
 dl.facts dt{color:var(--muted);font-size:15px}
-dl.facts dd{margin:0;font-weight:400;color:var(--text);font-variant-numeric:tabular-nums}
+dl.facts dd{margin:0;overflow-wrap:anywhere;font-weight:400;color:var(--text);font-variant-numeric:tabular-nums}
 .source{font-size:13.5px;color:var(--muted);margin-top:14px}
 .verified-line{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:15px;margin-top:14px}
 .report-cta{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
@@ -406,3 +406,5 @@ details.history summary::marker{color:var(--salvie)}
 .reg-review .form-actions{margin-top:4px;flex-wrap:wrap}
 .source-note{font-size:13px}
 .source-note a,.source a{color:inherit;text-decoration:underline;text-underline-offset:2px}
+.notice b{font-weight:500;color:var(--text)}
+.callbar .num{font-family:var(--font);font-weight:500;letter-spacing:0}

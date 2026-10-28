@@ -937,7 +937,7 @@ function viewVessel(id){
     ${backToSearch()}
     <header class="page-head">
       <h1 id="page-title" tabindex="-1">${esc(v.name)}</h1>
-      <p class="sub">${esc(c.name)} · ${esc(v.type)}</p>
+      <p class="sub">${esc([c.name, v.type].filter(Boolean).join(' · '))}</p>
       <div class="badges">${vv.state === 'unclaimed' ? statusPill(v) : ''}${newNumberPill(v)}</div>
     </header>
 
@@ -989,7 +989,7 @@ function viewVessel(id){
       </dl>
       ${v.missing ? `<div class="notice notice-warn" style="margin-top:10px">${ICON.warn}<p>Fartøyet finnes ikke lenger i Fiskeridirektoratets fartøyregister. Opplysningene kan være utdaterte.</p></div>` : ''}
       <p class="source">${v.demo || !REMOTE ? 'Demofartøy med oppdiktede opplysninger.'
-        : v.source === 'fiskeridir' ? 'Kilde for fartøyopplysninger: Fiskeridirektoratet (<a href="https://data.norge.no/nlod/no/2.0" target="_blank" rel="noopener">NLOD</a>). Kontaktinformasjonen er lagt inn av rederiet.'
+        : v.source === 'fiskeridir' ? 'Kilde for fartøyopplysninger: Fiskeridirektoratet (<a href="https://data.norge.no/nlod/no/2.0" target="_blank" rel="noopener">NLOD</a>).' + (v.bridgePhone || v.altPhone || v.email ? ' Kontaktinformasjonen er lagt inn av rederiet.' : '')
         : 'Fra fartøyregisteret.'}</p>
     </section>
 
@@ -2130,7 +2130,7 @@ function viewNoAccess(u){
       </div>` : `
     <form class="card stack" id="req-form" novalidate>
       <div class="field"><label for="req-name">Fullt navn</label><input class="input" id="req-name" autocomplete="name" maxlength="120"></div>
-      ${claim ? `<div class="notice notice-info">${ICON.info}<p>Søknaden gjelder fartøyet <strong>${esc(claim.vesselName)}</strong>. <button type="button" class="linkbtn" id="claim-clear">Fjern</button></p></div>` : ''}
+      ${claim ? `<div class="notice notice-info">${ICON.info}<p>Søknaden gjelder fartøyet <b>${esc(claim.vesselName)}</b>. <button type="button" class="linkbtn" id="claim-clear">Fjern</button></p></div>` : ''}
       <div class="field"><label for="req-org">Organisasjonsnummer til rederiet</label><input class="input" id="req-org" inputmode="numeric" maxlength="11" placeholder="9 siffer" value="${esc(claim && claim.orgnr ? claim.orgnr : '')}">
         <p class="hint" id="req-org-name"></p></div>
       <fieldset><legend class="legend">Din rolle i rederiet</legend><div class="choices">
