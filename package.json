@@ -6,7 +6,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node tests/sql.test.mjs && node tests/e2e.test.mjs"
+    "test": "node tests/sql.test.mjs && node tests/registry.test.mjs && node tests/registry-fetch.test.mjs && node tests/e2e.test.mjs"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.2.12",

@@ -1,29 +1,50 @@
 // Ende-til-ende: nettsiden i Supabase-modus mot Postgres med våre migrasjoner. Kjør: npm test
 // Ende-til-ende: nettsiden i Supabase-modus mot en ekte Postgres (PGlite) med våre migrasjoner
 import { PGlite } from '@electric-sql/pglite';
+import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
 import fs from 'fs';
 import { JSDOM } from 'jsdom';
 import { fileURLToPath } from 'url';
+import { runSync } from '../supabase/functions/registry-sync/registry.js';
 const ROOT = fileURLToPath(new URL('../', import.meta.url));
 const R = ROOT + 'supabase/';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++; };
 
-const pg = new PGlite();
+const pg = new PGlite({ extensions: { pg_trgm } });
 await pg.exec(`create schema auth; create table auth.users(id uuid primary key, email text);
 create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
 create function auth.jwt() returns jsonb language sql stable as $$ select coalesce(nullif(current_setting('request.jwt.claims', true), ''), '{}')::jsonb $$;
-create role anon; create role authenticated;`);
-for (const f of ['migrations/20261027000001_schema.sql', 'migrations/20261027000002_functions.sql', 'migrations/20261027000003_hardening.sql', 'seed.sql', 'migrations/20261027000004_register_import.sql']) await pg.exec(fs.readFileSync(R + f, 'utf8'));
-const U = { kari:'11111111-1111-1111-1111-111111111111', jonas:'22222222-2222-2222-2222-222222222222', ola:'44444444-4444-4444-4444-444444444444', ny:'66666666-6666-6666-6666-666666666666' };
+create role anon; create role authenticated; create role service_role bypassrls;`);
+for (const f of ['migrations/20261027000001_schema.sql', 'migrations/20261027000002_functions.sql', 'migrations/20261027000003_hardening.sql', 'seed.sql', 'migrations/20261027000004_register_import.sql', 'migrations/20261028000005_fiskeridir_sync.sql']) await pg.exec(fs.readFileSync(R + f, 'utf8'));
+const U = { kari:'11111111-1111-1111-1111-111111111111', jonas:'22222222-2222-2222-2222-222222222222', ola:'44444444-4444-4444-4444-444444444444', ny:'66666666-6666-6666-6666-666666666666', per:'77777777-7777-7777-7777-777777777777' };
 for (const [n, id] of Object.entries(U)) await pg.query(`insert into auth.users values ($1,$2)`, [id, n + '@eksempel.no']);
 await pg.exec(`select grant_membership('kari@eksempel.no','froyanes','admin','Kari Nordvik'); select grant_membership('jonas@eksempel.no','froyanes','member','Jonas Vik'); select make_platform_admin('ola@eksempel.no','Ola Drift');`);
 
-let current = null; const listeners = []; let otpTo = null; let rpcCount = 0;
+let current = null; const listeners = []; let otpTo = null; let rpcCount = 0; const rpcNames = []; const invoked = [];
+// Etterligner Edge Function «registry-sync»: samme kode (runSync) mot databasen, med et etterlignet API fra Fiskeridirektoratet
+const svc = async (fn, args) => { const keys = Object.keys(args); const r = await pg.query(`select ${fn}(${keys.map((k, i) => `${k} => $${i + 1}`).join(', ')}) as r`, keys.map(k => args[k] !== null && typeof args[k] === 'object' ? JSON.stringify(args[k]) : args[k])); return r.rows[0].r; };
+const FD = [
+  { id: '0020010149', name: 'HAVØRN', registrationMark: 'M 0777HØ', radioCallSign: 'LMNO', municipalityCode: '1508', length: 21.5, buildYear: 1999, owners: [{ id: '912345678', entityType: 'COMPANY', name: 'HAVØRN FISKE AS', postalCode: '6000', city: 'ÅLESUND' }] },
+  { id: '0020010150', name: 'LILLE SKJÆR', registrationMark: 'N 0012B', radioCallSign: null, municipalityCode: '1804', length: 8.2, owners: [{ id: '12345678901', entityType: 'PERSON', name: 'PER PERSON' }] }
+];
+const fdFetch = async url => url.includes('geonorge') ? { ok: true, status: 200, headers: { get: () => null }, json: async () => [{ kommunenummer: '1508', kommunenavnNorsk: 'Ålesund' }, { kommunenummer: '1804', kommunenavnNorsk: 'Bodø' }, ...Array.from({ length: 355 }, (_, i) => ({ kommunenummer: String(3000 + i), kommunenavnNorsk: 'K' + i }))] }
+  : { ok: true, status: 200, headers: { get: k => k.toLowerCase() === 'x-totalcount' ? String(FD.length) : null }, json: async () => new URL(url).searchParams.get('page') === '1' ? FD : [] };
+const functionsMock = { invoke: async (name, { body }) => {
+  invoked.push({ name, body, as: current });
+  if (current !== 'ola') return { data: null, error: { context: { json: async () => ({ error: 'forbidden' }) } } };
+  try {
+    if (body.action === 'approve') return { data: { ok: true, counts: await svc('registry_apply', { p_run: body.runId, p_actor: U.ola }) }, error: null };
+    const run = await svc('registry_start_run', { p_register: 'fiskeridir', p_mode: 'apply', p_trigger: 'manual', p_started_by: U.ola });
+    await runSync({ rpc: svc, runId: run.id, mode: run.mode, actor: U.ola, fetchImpl: fdFetch, sleep: async () => {} });
+    return { data: { ok: true, runId: run.id, mode: run.mode }, error: null };
+  } catch (e) { return { data: null, error: { context: { json: async () => ({ error: e.message }) } } }; }
+} };
 const fire = ev => listeners.forEach(cb => cb(ev, current ? { user: { id: U[current] } } : null));
 const mockClient = () => ({
+  functions: functionsMock,
   rpc: async (fn, args = {}) => {
-    rpcCount++;
+    rpcCount++; rpcNames.push(fn);
     await pg.query(`select set_config('request.jwt.claim.sub', $1, false), set_config('request.jwt.claims', $2, false)`, [current ? U[current] : '', current ? JSON.stringify({ email: current + '@eksempel.no' }) : '']);
     const keys = Object.keys(args);
     const params = keys.map(k => args[k] !== null && typeof args[k] === 'object' ? JSON.stringify(args[k]) : args[k]);
@@ -54,17 +75,21 @@ const go = async h => { w.location.hash = 'x'; await sleep(10); w.location.hash 
 const login = async who => { current = who; fire('SIGNED_IN'); await sleep(400); };
 await sleep(500);
 
-ok(E('REMOTE') === true && E('db.vessels.length') === 13, 'Starter i Supabase-modus og henter 13 fartøy');
+ok(E('REMOTE') === true && E('db.vessels.length') > 0 && E('db.vessels.length') < 13 && !rpcNames.includes('get_directory') && rpcNames.includes('get_home'), `Starter i Supabase-modus uten å hente hele registeret (${E('db.vessels.length')} av 13 fartøy lastet)`);
 ok(!d.getElementById('simulate-report') && !d.getElementById('reset-demo'), 'Demo-knapper skjult');
 ok(!JSON.stringify(E('db.verifications')).includes('"by"'), 'Offentlige bekreftelser uten hvem');
 const input = d.getElementById('q');
 input.value = 'Frøy'; input.dispatchEvent(new w.Event('input')); await sleep(300);
-ok(app().querySelectorAll('.result').length >= 3, 'Søk på navn');
+ok(app().querySelectorAll('.result').length >= 3 && rpcNames.includes('search_directory'), 'Søk på navn skjer i databasen');
 input.value = '000 97 101'; input.dispatchEvent(new w.Event('input')); await sleep(400);
 ok(app().textContent.includes('Du søkte på et tidligere telefonnummer') && app().textContent.includes('Bergholm'), 'Skjult gammelt nummer finnes via databasen');
 input.value = '000 98 401'; input.dispatchEvent(new w.Event('input')); await sleep(400);
 ok(app().textContent.includes('Ring nytt nummer'), 'Bekreftet gammelt nummer: «Ring nytt nummer»');
 
+// Delt lenke til et fartøy som ikke er lastet ennå
+ok(!E(`api.getVessel('kvitholmen')`), 'Kvitholmen er ikke lastet');
+await go('fartoy-kvitholmen');
+ok(app().querySelector('h1')?.textContent === 'Kvitholmen' || app().querySelector('h1')?.textContent.length > 0 && rpcNames.includes('get_vessel_public'), 'Delt lenke: fartøyet hentes fra databasen');
 await go('fartoy-froyanes');
 ok(app().querySelector('.vbadge')?.textContent.trim() === 'Bekreftet av rederiet' && app().querySelector('.vdate').textContent === 'Sist bekreftet 14. oktober 2026', 'Profil viser «Bekreftet av rederiet — 14. oktober 2026»');
 await go('fartoy-nordsjobas');
@@ -129,18 +154,69 @@ ok(app().querySelector('h1').textContent === 'Innmeldte feil' && app().textConte
 const sel = d.getElementById('verify-months'); sel.value = '12'; sel.dispatchEvent(new w.Event('change', { bubbles:true })); await sleep(500);
 ok((await pg.query(`select verify_months from settings`)).rows[0].verify_months === 12, 'Innstilling lagret');
 
-// Import: tegnsett og kolonner
-const latin1 = Buffer.from('Registration mark;Radio call sign;Name;Length;Width;Engine power;Engine build year;Tonnage;Tonnage type;Build year;Measure date;Rebuild year;Registration date;Municipality name;IMO Number;name;Entity type;ID;Postal code;City\nN-56-B;LK7381;bjørg håkon;14.99;5.8;403;1992;-;OC;2001;2001-06-26;-;2012-04-17;bodø;-;a. jensen as;COMPANY;998076803;8003;bodø\nTR-2-NR;-;a-bas;6.8;2.4;82;1993;2;OC;1969;-;2002;2018-02-13;nærøysund;-;hagen arne;PERSON;***********;7960;salsbruket\n', 'latin1');
-w.__buf = new Uint8Array(latin1).buffer;
-const dec = E('decodeRegisterFile(window.__buf)');
-ok(dec.enc === 'Windows-1252' && dec.text.includes('bjørg håkon'), 'Windows-1252-fil leses med æøå');
-const mapped = E('mapRegisterRows(parseDelimited(decodeRegisterFile(window.__buf).text, ";"))');
-ok(mapped[0].name === 'Bjørg Håkon' && mapped[0].municipality === 'Bodø' && mapped[0].ownerName === 'A. Jensen AS' && mapped[0].length === '14,99 m' && mapped[0].id === 'n-56-b', 'Rader tolkes riktig: ' + JSON.stringify(mapped[0]).slice(0, 120));
-ok(E('titleCase("vardøyfisk ii")') === 'Vardøyfisk II' && E('titleCase("m/s maja a/s")') === 'M/S Maja A/S' && E('titleCase("vi og dere")') === 'Vi Og Dere', 'Romertall og forkortelser');
-ok(mapped[1].ownerType === 'PERSON' && mapped[1].ownerName === '' && mapped[1].orgnr === '' && mapped[1].city === '', 'Personopplysninger sendes ikke videre');
+// Fartøyregister: synkronisering, forhåndsvisning og godkjenning
+const contactBefore = (await pg.query(`select string_agg(id||coalesce(bridge_phone,'')||coalesce(alt_phone,'')||coalesce(email,'')||updated_at::text, '|' order by id) s from vessels`)).rows[0].s;
+const verBefore = (await pg.query(`select count(*)::int n, max(at)::text m from verifications`)).rows[0];
+await go('mine-fartoy');
+ok(!!app().querySelector('a[href="#fartoyregister"]'), 'Plattformadmin har lenke til Fartøyregister');
+await go('importer'); await sleep(300);
+ok(w.location.hash === '#fartoyregister' && app().querySelector('h1')?.textContent === 'Fartøyregister', 'Gammel import-lenke går til Fartøyregister');
+ok(app().textContent.includes('Første gang lages en forhåndsvisning'), 'Forklarer forhåndsvisning før første import');
+d.getElementById('reg-sync').click(); await sleep(900);
+ok(invoked.length === 1 && invoked[0].name === 'registry-sync' && invoked[0].body.action === 'sync', 'Knappen kaller Edge Function registry-sync');
+ok(!!d.getElementById('pv-approve') && app().textContent.includes('Første import: forhåndsvisning') && app().textContent.includes('2 nye fartøy'), 'Forhåndsvisning vises med 2 nye fartøy');
+ok((await pg.query(`select count(*)::int n from vessel_identifiers`)).rows[0].n === 0, 'Ingenting importert før godkjenning');
+d.getElementById('pv-approve').click(); await sleep(900);
+ok((await pg.query(`select count(*)::int n from vessel_identifiers`)).rows[0].n === 2 && invoked[1].body.action === 'approve' && Number.isInteger(invoked[1].body.runId), 'Godkjent: 2 fartøy importert');
+ok(app().textContent.includes('Synkronisert') && !d.getElementById('pv-approve'), 'Status: synkronisert');
+ok((await pg.query(`select string_agg(id||coalesce(bridge_phone,'')||coalesce(alt_phone,'')||coalesce(email,'')||updated_at::text, '|' order by id) s from vessels where id not like 'fd-%'`)).rows[0].s === contactBefore, 'Kontaktinformasjon og tidsstempler uendret');
+const verAfter = (await pg.query(`select count(*)::int n, max(at)::text m from verifications`)).rows[0];
+ok(verAfter.n === verBefore.n && verAfter.m === verBefore.m, 'Ingen nye «Bekreftet av rederiet»');
+ok((await pg.query(`select count(*)::int n from vessels where name ilike '%person%'`)).rows[0].n === 0 && !(await pg.query(`select string_agg(owners::text, '') s from registry_staging`)).rows[0].s?.includes('PER PERSON'), 'Personeiers navn er ikke lagret');
+
+// Andre forsøk mens noe kjører: avvises på serveren
+await pg.query(`insert into registry_runs(register, mode, trigger) values ('fiskeridir','apply','manual')`);
+await go('fartoyregister'); await sleep(300);
+ok(d.getElementById('reg-sync')?.disabled === true && app().textContent.includes('Synkroniserer'), 'Knappen er låst mens en synkronisering pågår');
+await pg.query(`update registry_runs set status='failed', error='test' where status='running'`);
+await go('fartoyregister'); await sleep(300);
+ok(app().textContent.includes('Siste synkronisering feilet') && app().textContent.includes('beholdes'), 'Feilet kjøring vises, forrige data beholdes');
+
+// Nytt fartøy uten kontaktinformasjon, søk og kilde
+current = null; fire('SIGNED_OUT'); await sleep(300);
+await go('sok');
+const inp2 = d.getElementById('q'); inp2.value = 'havørn'; inp2.dispatchEvent(new w.Event('input')); await sleep(400);
+ok(app().textContent.includes('Havørn'), 'Importert fartøy finnes i søket');
+inp2.value = 'LMNO'; inp2.dispatchEvent(new w.Event('input')); await sleep(400);
+ok(app().textContent.includes('Kallesignal'), 'Søk på kallesignal');
+inp2.value = 'havørm'; inp2.dispatchEvent(new w.Event('input')); await sleep(400);
+ok(app().textContent.includes('Havørn'), 'Søk med skrivefeil');
+await go('fartoy-fd-0020010149');
+ok(app().textContent.includes('Kontaktinformasjon er ikke registrert ennå.'), 'Fartøy uten kontaktinfo: «Kontaktinformasjon er ikke registrert ennå.»');
+ok(app().textContent.includes('Kilde for fartøyopplysninger: Fiskeridirektoratet') && !d.getElementById('source-note').hidden, 'Kilde oppgitt på profilen og nederst på siden');
+ok(app().textContent.includes('Ålesund') && app().textContent.includes('M-777-HØ'), 'Registeropplysninger vises');
+
+// Krev fartøyet: innlogging → søknad med fartøyet fylt inn. Gir ikke tilgang alene.
+app().querySelector('a[href="#be-om-tilgang-fd-0020010149"]').click(); await sleep(300);
+ok(app().querySelector('h1').textContent === 'Be om tilgang til Havørn', 'Be om tilgang: innlogging først');
+await login('per'); await sleep(200);
+ok(app().querySelector('h1').textContent === 'Be om tilgang til rederiet' && d.getElementById('req-org').value === '912345678' && app().textContent.includes('Søknaden gjelder fartøyet Havørn'), 'Søknadsskjema med fartøy og org.nr. fylt inn');
+d.getElementById('req-name').value = 'Per Rederi';
+d.querySelector('input[name="basis"][value="signatur"]').checked = true;
+d.getElementById('req-form').dispatchEvent(new w.Event('submit', { cancelable:true, bubbles:true })); await sleep(400);
+ok((await pg.query(`select count(*)::int n from access_requests where vessel_id='fd-0020010149' and orgnr='912345678'`)).rows[0].n === 1, 'Søknad lagret med fartøyet');
+ok((await pg.query(`select count(*)::int n from memberships where user_id=$1`, [U.per])).rows[0].n === 0, 'Ingen tilgang gitt automatisk');
+const before = invoked.length;
+ok(!(await w.eval(`callRegistryFunction({ action: 'sync' }).then(() => true, e => e.code === 'forbidden' ? false : 'annen')`)) && invoked.length === before + 1, 'Vanlig bruker avvises av serveren');
 
 // Uten nett: katalog fra lokal kopi
-ok(!!w.localStorage.getItem('fartoykontakt-katalog-v1'), 'Katalogen er lagret lokalt for dårlig dekning');
+const saved = JSON.parse(w.localStorage.getItem('fartoykontakt-kort-v2') || 'null');
+ok(saved && saved.cards.vessels.length > 0 && saved.cards.vessels.length <= 300, `Sist viste fartøy lagret lokalt for dårlig dekning (${saved && saved.cards.vessels.length})`);
+// Uten nett: søk i den lokale kopien
+const realRpc = w.eval('sb').rpc; w.eval('sb').rpc = async () => { throw new Error('Failed to fetch'); };
+await go('sok'); const inp3 = d.getElementById('q'); inp3.value = 'Havørn'; inp3.dispatchEvent(new w.Event('input')); await sleep(400);
+ok(app().textContent.includes('Havørn'), 'Uten nett: søket bruker fartøyene som er lagret på enheten');
+w.eval('sb').rpc = realRpc;
 ok(errors.length === 0, 'Ingen skriptfeil ' + errors.join(' | '));
 console.log(`${rpcCount} databasekall totalt`);
 console.log(fails ? `${fails} feilet` : 'Alle integrasjonstester bestått');

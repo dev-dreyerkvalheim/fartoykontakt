@@ -1,9 +1,10 @@
 // Tester databasefunksjoner og tilgangsregler i en lokal Postgres (PGlite). Kjør: npm test
 import { PGlite } from '@electric-sql/pglite';
+import { pg_trgm } from '@electric-sql/pglite/contrib/pg_trgm';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 const R = fileURLToPath(new URL('../supabase/', import.meta.url));
-const db = new PGlite();
+const db = new PGlite({ extensions: { pg_trgm } });
 let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++; };
 // Etterligner Supabase sin auth-del
 await db.exec(`
@@ -11,12 +12,13 @@ create schema auth;
 create table auth.users(id uuid primary key, email text);
 create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
 create function auth.jwt() returns jsonb language sql stable as $$ select coalesce(nullif(current_setting('request.jwt.claims', true), ''), '{}')::jsonb $$;
-create role anon; create role authenticated;
+create role anon; create role authenticated; create role service_role bypassrls;
 `);
 await db.exec(fs.readFileSync(R + 'migrations/20261027000001_schema.sql', 'utf8'));
 await db.exec(fs.readFileSync(R + 'migrations/20261027000002_functions.sql', 'utf8'));
 await db.exec(fs.readFileSync(R + 'migrations/20261027000003_hardening.sql', 'utf8'));
 await db.exec(fs.readFileSync(R + 'migrations/20261027000004_register_import.sql', 'utf8'));
+await db.exec(fs.readFileSync(R + 'migrations/20261028000005_fiskeridir_sync.sql', 'utf8'));
 await db.exec(fs.readFileSync(R + 'seed.sql', 'utf8'));
 const U = { kari:'11111111-1111-1111-1111-111111111111', jonas:'22222222-2222-2222-2222-222222222222', per:'33333333-3333-3333-3333-333333333333', ola:'44444444-4444-4444-4444-444444444444', berg:'55555555-5555-5555-5555-555555555555' };
 for (const [n, id] of Object.entries(U)) await db.query(`insert into auth.users values ($1, $2)`, [id, n + '@eksempel.no']);

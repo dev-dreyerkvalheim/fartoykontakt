@@ -388,3 +388,21 @@ details.history summary::marker{color:var(--salvie)}
 .toast.show{opacity:1;transform:translate(-50%,0)}
 .has-callbar .toast{bottom:calc(96px + env(safe-area-inset-bottom, 0px))}
 @media (prefers-reduced-motion: reduce){*,*::before,*::after{transition:none!important;animation:none!important}}
+
+/* Fartøyregister (plattformadministrator) */
+.stats{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin:16px 0}
+.stat{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-sm);padding:14px;display:flex;flex-direction:column;gap:2px;min-width:0}
+.stat-v{font-family:var(--font);font-size:24px;font-weight:500;color:var(--text);font-variant-numeric:tabular-nums}
+.stat-k{font-size:14px;color:var(--body)}
+.stat .hint{font-size:12.5px}
+.pv-counts{list-style:none;margin:0;padding:0;display:grid;gap:6px;color:var(--body)}
+.pv-counts strong{color:var(--text);font-variant-numeric:tabular-nums}
+.reg-list{list-style:none;margin:6px 0 0;padding:0}
+.reg-list li{padding:8px 0;border-top:1px solid var(--border);font-size:14.5px;color:var(--body);overflow-wrap:anywhere}
+.reg-reviews{list-style:none;margin:0;padding:0;display:grid;gap:10px}
+.reg-review{display:flex;flex-direction:column;gap:8px;align-items:flex-start}
+.reg-review h3{margin:0;font-size:17px}
+.reg-review p{margin:0;overflow-wrap:anywhere}
+.reg-review .form-actions{margin-top:4px;flex-wrap:wrap}
+.source-note{font-size:13px}
+.source-note a,.source a{color:inherit;text-decoration:underline;text-underline-offset:2px}

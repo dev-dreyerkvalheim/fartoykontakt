@@ -496,7 +496,7 @@ function histStatus(h, owners){
   if (owner && owner !== h.vesselId) return 'reassigned';
   return h.status;
 }
-function searchLocal(raw, extraHistory){
+function searchLocal(raw, extraHistory, onlyIds){
   const histAll = extraHistory && extraHistory.length ? [...db.numberHistory.filter(h => !extraHistory.some(x => x.id === h.id)), ...extraHistory] : db.numberHistory;
   const q = norm(raw).trim().replace(/^(ms|mv|m\/s|fv)\s+/, '');
   const qc = compact(q);
@@ -506,6 +506,7 @@ function searchLocal(raw, extraHistory){
   const owners = isPhoneQuery ? currentPhoneOwners() : null;
   const out = [];
   for (const v of db.vessels){
+    if (onlyIds && !onlyIds.has(v.id)) continue;
     const c = api.company(v.companyId);
     let best = null;
     const consider = (score, field, extra) => { if (!best || score > best.score) best = { score, field, fuzzy:false, ...extra }; };
@@ -670,13 +671,16 @@ function route(){
   renderNav();
   let m;
   if (h === 'sok') return viewHome();
+  // Fartøy som ikke er lagret på enheten (delt lenke, bokmerke): hent det fra databasen først
+  if (REMOTE && (m = h.match(/^(?:fartoy|meld-feil|rediger)-([a-z0-9-]+)$/)) && !api.getVessel(m[1])) return routeWhenLoaded(m[1], location.hash);
   if ((m = h.match(/^fartoy-([a-z0-9-]+)$/))) return viewVessel(m[1]);
   if ((m = h.match(/^meld-feil-([a-z0-9-]+)$/))) return viewReport(m[1]);
+  if (REMOTE && (m = h.match(/^be-om-tilgang-([a-z0-9-]+)$/))) return api.getVessel(m[1]) ? startClaim(m[1]) : routeWhenLoaded(m[1], location.hash);
   if (h === 'logg-inn') return viewLogin();
   if (h === 'registrer-rederi') return viewRegister();
   if (h === 'mine-fartoy') return viewDashboard();
   if (h === 'innmeldte-feil') return viewDashboard({ focusReports:true });
-  if (h === 'importer') return viewImport();
+  if (h === 'importer' || h === 'fartoyregister') return viewRegistry();
   if ((m = h.match(/^rediger-([a-z0-9-]+)$/))) return viewEdit(m[1]);
   return viewNotFound();
 }
@@ -744,18 +748,16 @@ function exampleChips(){
   let items;
   if (!REMOTE) items = [['Frøyanes'], ['Bergholm'], ['LNSB'], ['+47 000 98 401', '(gammelt nummer)']];
   else {
-    const pool = db.vessels.filter(v => v.callsign && v.name.length <= 14);
+    const pool = cache.exampleIds.map(id => api.getVessel(id)).filter(Boolean);
     if (pool.length < 3) return '';
-    const day = Math.floor(Date.now() / 86400000);
-    const pick = k => pool[(day * 7919 + k * 104729) % pool.length];
-    items = [[pick(1).name], [pick(2).name], [pick(3).callsign, '(kallesignal)']];
+    items = [[pool[0].name], [pool[1].name], [pool[2].callsign, '(kallesignal)']];
   }
   return `<div class="examples"><span>Prøv:</span>
     ${items.map(([q, note]) => `<button class="chip" type="button" data-try="${esc(q)}">${esc(q)}${note ? ` <span class="chip-note">${esc(note)}</span>` : ''}</button>`).join('')}
   </div>`;
 }
 function renderIntro(){
-  const recent = db.vessels.map(v => ({ v, h: lastSwitch(v) })).filter(x => x.h && daysSince(x.h.replacedAt) <= 60)
+  const recent = (REMOTE ? cache.recentIds.map(id => api.getVessel(id)).filter(Boolean) : db.vessels).map(v => ({ v, h: lastSwitch(v) })).filter(x => x.h && daysSince(x.h.replacedAt) <= 60)
     .sort((a,b) => b.h.replacedAt.localeCompare(a.h.replacedAt)).map(x => x.v);
   return `<div class="intro">
     ${exampleChips()}
@@ -884,9 +886,36 @@ document.addEventListener('keydown', e => {
    ===================================================================== */
 function backToSearch(){ return `<a class="back" href="#sok">${ICON.back}${state.query ? 'Tilbake til søket' : 'Til søket'}</a>`; }
 
+/* «Er du fra rederiet?» — fører til innlogging og søknad om tilgang, med fartøyet fylt inn.
+   Tilgang gis aldri automatisk; en plattformadministrator må godkjenne. */
+const CLAIM_KEY = 'fartoykontakt-krav';
+function claimLink(v){
+  const u = auth.current();
+  if (u && canManage(u, v)) return `<p class="hint" style="margin-top:10px"><a href="#rediger-${esc(v.id)}">Legg inn kontaktinformasjon</a></p>`;
+  if (!REMOTE) return `<p class="hint" style="margin-top:10px">Er du fra rederiet? <a href="#logg-inn">Logg inn og legg inn kontaktinformasjon</a>.</p>`;
+  if (u && u.role !== 'none') return '';
+  return `<p class="hint" style="margin-top:10px">Er du fra rederiet? <a href="#be-om-tilgang-${esc(v.id)}">Be om tilgang til fartøyet</a></p>`;
+}
+function startClaim(id){
+  const v = api.getVessel(id); if (!v) return viewNotFound();
+  const c = api.company(v.companyId);
+  const claim = { vesselId: v.id, vesselName: v.name, orgnr: c && c.id !== 'privat' ? c.orgnr : '' };
+  state.claim = claim;
+  try { localStorage.setItem(CLAIM_KEY, JSON.stringify(claim)); } catch(e){}
+  const u = auth.current();
+  if (!u) return viewLoginRemote(true);
+  if (u.role === 'none') return viewNoAccess(u);
+  go('mine-fartoy');
+}
+function currentClaim(){
+  if (state.claim) return state.claim;
+  try { return JSON.parse(localStorage.getItem(CLAIM_KEY) || 'null'); } catch(e){ return null; }
+}
+
 function viewVessel(id){
   state.lastRoute = 'vessel';
   const v = api.getVessel(id); if (!v) return viewNotFound();
+  if (REMOTE && state.fetched !== id) refreshVesselInBackground(id);
   const c = api.company(v.companyId);
   const vv = vesselVerification(v);
   // Merking per felt vises bare når ikke alt er bekreftet
@@ -925,12 +954,11 @@ function viewVessel(id){
       ${shownPrev ? `<p class="prev-note">Fartøyet byttet nummer ${esc(fmtDate(shownPrev.replacedAt))}. Det gamle nummeret <s class="num">${esc(fmtPhone(shownPrev.number))}</s> er ikke lenger i bruk.</p>` : ''}
       ${contactRows.length ? `<div class="rows" style="margin-top:12px">${contactRows.join('')}</div>` : ''}
     </section>` : `
-    <section class="card">
-      <h2>Ingen kontaktinformasjon ennå</h2>
-      <p class="hint" style="margin-top:6px">Rederiet har ikke lagt inn telefonnummer eller e-post for dette fartøyet. ${c.phone ? 'Prøv å ringe rederiet.' : 'Vi viser bare opplysninger fra fartøyregisteret.'}</p>
-      <p class="hint" style="margin-top:10px">Er du fra rederiet? <a href="#logg-inn">Logg inn og legg inn kontaktinformasjon</a>.</p>
+    <section class="card no-contact">
+      <h2>Kontaktinformasjon er ikke registrert ennå.</h2>
+      <p class="hint" style="margin-top:6px">${c.phone ? 'Prøv å ringe rederiet.' : 'Vi viser bare opplysninger fra fartøyregisteret.'}</p>
+      ${claimLink(v)}
     </section>`}
-
     ${c.id === 'privat' ? `<section class="card">
       <h2>Eier</h2>
       <p class="hint" style="margin-top:6px">Fartøyet eies av en privatperson. Vi viser ikke navn på private eiere.</p>
@@ -953,7 +981,10 @@ function viewVessel(id){
         ${[['Registreringsmerke', v.regNr], ['Kallesignal', v.callsign], ['Type', v.type], ['Lengde', v.length], ['Byggeår', v.buildYear], ['IMO-nummer', v.imo], [v.demo ? 'Hjemmehavn' : 'Kommune', v.homePort]]
           .filter(([, val]) => val).map(([k, val]) => `<dt>${k}</dt><dd>${esc(val)}</dd>`).join('')}
       </dl>
-      <p class="source">${v.demo || !REMOTE ? 'Demofartøy med oppdiktede opplysninger.' : 'Fra Fiskeridirektoratets fartøyregister.'}</p>
+      ${v.missing ? `<div class="notice notice-warn" style="margin-top:10px">${ICON.warn}<p>Fartøyet finnes ikke lenger i Fiskeridirektoratets fartøyregister. Opplysningene kan være utdaterte.</p></div>` : ''}
+      <p class="source">${v.demo || !REMOTE ? 'Demofartøy med oppdiktede opplysninger.'
+        : v.source === 'fiskeridir' ? 'Kilde for fartøyopplysninger: Fiskeridirektoratet (<a href="https://data.norge.no/nlod/no/2.0" target="_blank" rel="noopener">NLOD</a>). Kontaktinformasjonen er lagt inn av rederiet.'
+        : 'Fra fartøyregisteret.'}</p>
     </section>
 
     <section class="card report-cta">
@@ -1231,7 +1262,8 @@ function viewDashboard(opts = {}){
     ${isPlatform || u.platform ? `<section class="dash-section" aria-labelledby="set-h">
       <h2 id="set-h">${isPlatform ? 'Innstillinger' : 'Plattform'}</h2>
       <div class="card stack">
-        ${REMOTE ? `<div class="form-actions"><a class="btn btn-secondary" href="#importer">Importer fartøyregisteret</a></div>` : ''}
+        ${REMOTE ? `<div class="form-actions"><a class="btn btn-secondary" href="#fartoyregister">Fartøyregister</a></div>
+          <p class="hint">Synkronisering med Fiskeridirektoratet, eierskifter og saker til gjennomgang.</p>` : ''}
         <div class="field">
           <label for="verify-months">Hvor lenge gjelder en bekreftelse fra rederiet?</label>
           <select class="input" id="verify-months">${[3,6,12].map(n => `<option value="${n}" ${n === verifyMonths() ? 'selected' : ''}>${n} måneder</option>`).join('')}</select>
@@ -1844,11 +1876,14 @@ window.addEventListener('online', syncOnline); window.addEventListener('offline'
 
 /* =====================================================================
    SUPABASE — brukes når siden er satt opp med Supabase-nøkler.
-   All tilgangssjekk skjer i databasefunksjonene (supabase/migrations). Nettleseren holder en
-   kopi av den offentlige katalogen for raskt søk, og den lagres også lokalt så siden virker
-   med dårlig eller ingen dekning om bord.
+   All tilgangssjekk skjer i databasefunksjonene (supabase/migrations). Nettleseren laster aldri hele
+   fartøyregisteret: søket skjer i databasen, og bare fartøyene som vises hentes. De sist viste
+   fartøyene lagres lokalt, så siden virker med dårlig eller ingen dekning om bord.
    ===================================================================== */
-const CACHE_KEY = 'fartoykontakt-katalog-v1';
+const CACHE_KEY = 'fartoykontakt-kort-v2';
+const CACHE_MAX = 300;   // fartøy som lagres lokalt
+try { localStorage.removeItem('fartoykontakt-katalog-v1'); } catch(e){}   // gammel kopi av hele katalogen
+const cache = { seen: new Map(), pinned: new Set(), adminHistory: [], recentIds: [], exampleIds: [] };
 
 async function remoteRpc(name, args){
   let res;
@@ -1866,51 +1901,126 @@ async function remoteRpc(name, args){
   return data;
 }
 
-async function loadDirectory(){
-  let d;
+/* Legger fartøykort fra databasen inn i den lokale kopien (erstatter det som var der for de samme fartøyene) */
+function mergeCards(cards, opts = {}){
+  if (!cards) return;
+  const vids = new Set((cards.vessels || []).map(v => v.id));
+  const cids = new Set((cards.companies || []).map(c => c.id));
+  const upsert = (list, items) => { const m = new Map(list.map(x => [x.id, x])); for (const x of items || []) m.set(x.id, x); return [...m.values()]; };
+  db.companies = upsert(db.companies, cards.companies);
+  db.vessels = upsert(db.vessels, cards.vessels);
+  db.verifications = [...db.verifications.filter(x => !(x.scope === 'vessel' ? vids.has(x.scopeId) : cids.has(x.scopeId))), ...(cards.verifications || [])];
+  db.publicHistory = [...db.publicHistory.filter(h => !vids.has(h.vesselId)), ...(cards.numberInfo || [])];
+  const now = Date.now();
+  for (const id of vids){ cache.seen.set(id, now); if (opts.pin) cache.pinned.add(id); }
+  rebuildHistory();
+  if (!opts.noSave) saveCache();
+}
+function rebuildHistory(){
+  const own = new Set(cache.adminHistory.map(h => h.id));
+  db.numberHistory = [...db.publicHistory.filter(h => !own.has(h.id)), ...cache.adminHistory];
+}
+/* Lagrer de sist brukte fartøyene lokalt (begrenset antall) */
+function saveCache(){
   try {
-    d = await remoteRpc('get_directory');
-    try { localStorage.setItem(CACHE_KEY, JSON.stringify(d)); } catch(e){}
+    const keep = new Set([...cache.recentIds, ...cache.exampleIds,
+      ...[...cache.seen.entries()].sort((a, b) => b[1] - a[1]).map(([id]) => id)].slice(0, CACHE_MAX));
+    const vessels = db.vessels.filter(v => keep.has(v.id));
+    const cids = new Set(vessels.map(v => v.companyId));
+    localStorage.setItem(CACHE_KEY, JSON.stringify({
+      at: Date.now(), settings: db.settings, recentIds: cache.recentIds, exampleIds: cache.exampleIds,
+      seen: vessels.map(v => [v.id, cache.seen.get(v.id) || 0]),
+      cards: { vessels, companies: db.companies.filter(c => cids.has(c.id)),
+        verifications: db.verifications.filter(x => x.scope === 'vessel' ? keep.has(x.scopeId) : cids.has(x.scopeId)),
+        numberInfo: db.publicHistory.filter(h => keep.has(h.vesselId)) }
+    }));
+  } catch(e){}
+}
+function loadCache(){
+  let c; try { c = JSON.parse(localStorage.getItem(CACHE_KEY) || 'null'); } catch(e){ c = null; }
+  if (!c || !c.cards) return false;
+  db.settings = c.settings || db.settings;
+  cache.recentIds = c.recentIds || []; cache.exampleIds = c.exampleIds || [];
+  mergeCards(c.cards, { noSave: true });
+  for (const [id, t] of c.seen || []) cache.seen.set(id, t);
+  return true;
+}
+
+/* Forsiden: innstillinger, fartøy som nylig har byttet nummer og dagens eksempler */
+async function loadHome(){
+  try {
+    const d = await remoteRpc('get_home');
+    db.settings = d.settings || { verifyMonths: 6 };
+    cache.recentIds = d.recentIds || []; cache.exampleIds = d.exampleIds || [];
+    mergeCards(d);
     state.fromCache = false;
   } catch(e){
-    try { d = JSON.parse(localStorage.getItem(CACHE_KEY) || 'null'); } catch(_){ d = null; }
-    if (!d) throw e;
+    if (!loadCache()) throw e;
     state.fromCache = true;
   }
-  db.companies = d.companies; db.vessels = d.vessels; db.verifications = d.verifications;
-  db.settings = d.settings || { verifyMonths: 6 };
-  db.publicHistory = d.numberInfo || [];
-  if (!db.session) db.numberHistory = db.publicHistory.slice();
+}
+
+/* Henter ett fartøy (for eksempel fra en delt lenke) når det ikke finnes i den lokale kopien */
+async function fetchVessel(id){
+  const d = await remoteRpc('get_vessel_public', { p_id: id });
+  mergeCards(d);
+  return api.getVessel(id);
+}
+/* Fartøyprofilen vises straks fra lokal kopi; ferske data hentes i bakgrunnen */
+function refreshVesselInBackground(id){
+  const before = JSON.stringify([api.getVessel(id), db.verifications.filter(x => x.scopeId === id)]);
+  const hash = location.hash;
+  remoteRpc('get_vessel_public', { p_id: id }).then(d => {
+    mergeCards(d);
+    const after = JSON.stringify([api.getVessel(id), db.verifications.filter(x => x.scopeId === id)]);
+    if (after !== before && location.hash === hash) route();
+  }).catch(() => {});
+}
+async function routeWhenLoaded(id, hash){
+  app.innerHTML = `<div style="padding:40px 0;text-align:center" role="status"><div class="spinner"></div><p class="hint" style="margin-top:12px">Henter fartøy …</p></div>`;
+  let v = null;
+  try { v = await fetchVessel(id); } catch(e){ if (e.code === 'offline' && location.hash === hash){ app.innerHTML = `<div class="empty"><h2>Du er uten nett</h2><p>Fartøyet er ikke lagret på denne enheten. Prøv igjen når du har dekning.</p></div>`; return; } }
+  if (location.hash !== hash) return;
+  if (!v) return viewNotFound();
+  state.fetched = id; route(); state.fetched = null;
 }
 
 async function loadAdmin(){
   const { data: { session } } = await sb.auth.getSession();
-  if (!session){
-    Object.assign(db, { session:null, users:{}, reports:[], changes:[], outbox:[], numberHistory: db.publicHistory.slice() });
-    return;
-  }
+  const clear = () => { Object.assign(db, { reports:[], changes:[], outbox:[] }); cache.adminHistory = []; cache.pinned.clear(); rebuildHistory(); };
+  if (!session){ db.session = null; db.users = {}; clear(); return; }
   const ctx = await remoteRpc('my_context');
   if (!ctx){ db.session = null; return; }
   db.users = { [ctx.id]: ctx };
   db.session = ctx.id;
-  if (ctx.role === 'none'){ Object.assign(db, { reports:[], changes:[], outbox:[], numberHistory: db.publicHistory.slice() }); return; }
+  if (ctx.role === 'none'){ clear(); return; }
   const a = await remoteRpc('get_admin_data');
   db.reports = a.reports; db.changes = a.changes; db.outbox = a.outbox;
   for (const u of a.users) if (!db.users[u.id]) db.users[u.id] = u;
-  const own = new Set(a.numberHistory.map(h => h.id));
-  db.numberHistory = [...db.publicHistory.filter(h => !own.has(h.id)), ...a.numberHistory];
+  cache.adminHistory = a.numberHistory || [];
+  cache.pinned.clear();
+  mergeCards(a.cards, { pin: true });
 }
 
-async function refreshAll(){ await loadDirectory(); await loadAdmin(); renderNav(); }
+async function refreshAll(){ await loadHome(); await loadAdmin(); renderNav(); }
 
 function installRemote(){
   // Lesing
   api.search = async q => {
-    let extra = [];
-    if (/^[\d\s+()-]+$/.test(q.trim()) && phoneKey(q).length >= 4){
-      try { extra = await remoteRpc('search_number_history', { q }); } catch(e){ /* uten nett: søk i lokal kopi */ }
+    let r;
+    try { r = await remoteRpc('search_directory', { q }); }
+    catch(e){ return searchLocal(q); }   // uten nett: søk i fartøyene som er lagret på enheten
+    mergeCards(r);
+    const ids = r.ids || [];
+    const res = searchLocal(q, r.history, new Set(ids));
+    // Treff databasen fant (for eksempel med skrivefeil) som det enkle lokale søket ikke kjenner igjen
+    const have = new Set(res.results.map(x => x.v.id));
+    for (const id of ids){
+      const v = api.getVessel(id);
+      if (v && !have.has(id)) res.results.push({ v, c: api.company(v.companyId), field:'name', fuzzy:true, score:1 });
     }
-    return searchLocal(q, extra);
+    res.fuzzy = res.results.length > 0 && res.results.every(x => x.fuzzy);
+    return res;
   };
   // Skriving — hver funksjon sjekker tilgang i databasen, deretter hentes ferske data
   api.report = async (vesselId, d) => {
@@ -1938,7 +2048,8 @@ function installRemote(){
   api.setVerifyMonths = async months => { await remoteRpc('set_verify_months', { p_months: Number(months) }); await refreshAll(); };
 
   auth.signOut = () => {
-    Object.assign(db, { session:null, users:{}, reports:[], changes:[], outbox:[], numberHistory: db.publicHistory.slice() });
+    Object.assign(db, { session:null, users:{}, reports:[], changes:[], outbox:[] });
+    cache.adminHistory = []; cache.pinned.clear(); rebuildHistory();
     sb.auth.signOut().catch(() => {});
   };
   registry.lookupOrg = async orgnr => {
@@ -1957,9 +2068,11 @@ function installRemote(){
 function viewLoginRemote(forRegister){
   state.lastRoute = 'login';
   if (auth.current()) return go('mine-fartoy');
+  const claim = forRegister && location.hash.startsWith('#be-om-tilgang-') ? currentClaim() : null;
   app.innerHTML = `
+    ${claim ? `<a class="back" href="#fartoy-${esc(claim.vesselId)}">${ICON.back}Tilbake til ${esc(claim.vesselName)}</a>` : ''}
     <header class="page-head">
-      <h1 id="page-title" tabindex="-1">${forRegister ? 'Registrer rederiet' : 'Logg inn for rederier'}</h1>
+      <h1 id="page-title" tabindex="-1">${claim ? `Be om tilgang til ${esc(claim.vesselName)}` : forRegister ? 'Registrer rederiet' : 'Logg inn for rederier'}</h1>
       <p class="sub">${forRegister ? 'Logg inn med e-post først. Deretter ber du om tilgang til rederiet.' : 'Her kan rederier oppdatere telefonnummer og e-post for egne fartøy. Du trenger ikke logge inn for å søke.'}</p>
     </header>
     <form class="card stack" id="otp-form" novalidate>
@@ -1999,6 +2112,7 @@ function viewLoginRemote(forRegister){
 function viewNoAccess(u){
   state.lastRoute = 'noaccess';
   const pending = u.pendingRequest || state.requestSent;
+  const claim = pending ? null : currentClaim();
   app.innerHTML = `
     <header class="page-head">
       <h1 id="page-title" tabindex="-1">${pending ? 'Venter på godkjenning' : 'Be om tilgang til rederiet'}</h1>
@@ -2010,7 +2124,8 @@ function viewNoAccess(u){
       </div>` : `
     <form class="card stack" id="req-form" novalidate>
       <div class="field"><label for="req-name">Fullt navn</label><input class="input" id="req-name" autocomplete="name" maxlength="120"></div>
-      <div class="field"><label for="req-org">Organisasjonsnummer til rederiet</label><input class="input" id="req-org" inputmode="numeric" maxlength="11" placeholder="9 siffer">
+      ${claim ? `<div class="notice notice-info">${ICON.info}<p>Søknaden gjelder fartøyet <strong>${esc(claim.vesselName)}</strong>. <button type="button" class="linkbtn" id="claim-clear">Fjern</button></p></div>` : ''}
+      <div class="field"><label for="req-org">Organisasjonsnummer til rederiet</label><input class="input" id="req-org" inputmode="numeric" maxlength="11" placeholder="9 siffer" value="${esc(claim && claim.orgnr ? claim.orgnr : '')}">
         <p class="hint" id="req-org-name"></p></div>
       <fieldset><legend class="legend">Din rolle i rederiet</legend><div class="choices">
         <label class="choice"><input type="radio" name="basis" value="signatur"><span>Jeg er daglig leder eller har signaturrett<small>Vi sjekker dette mot Enhetsregisteret.</small></span></label>
@@ -2020,7 +2135,10 @@ function viewNoAccess(u){
       <div class="form-actions"><button class="btn btn-primary" type="submit" id="req-send">Send søknad</button><button type="button" class="btn btn-ghost" id="logout">Logg ut</button></div>
     </form>`}`;
   document.getElementById('logout')?.addEventListener('click', () => { auth.signOut(); toast('Du er logget ut'); go('sok'); });
+  const dropClaim = () => { state.claim = null; try { localStorage.removeItem(CLAIM_KEY); } catch(e){} };
+  document.getElementById('claim-clear')?.addEventListener('click', () => { dropClaim(); viewNoAccess(u); });
   const org = document.getElementById('req-org');
+  if (org && org.value) setTimeout(() => org.dispatchEvent(new Event('change')), 0);
   org?.addEventListener('change', async () => {
     const o = digits(org.value); const out = document.getElementById('req-org-name');
     if (o.length !== 9){ out.textContent = ''; return; }
@@ -2034,7 +2152,7 @@ function viewNoAccess(u){
     const msg = !name ? 'Skriv inn navnet ditt.' : o.length !== 9 ? 'Organisasjonsnummeret må ha 9 siffer.' : !basis ? 'Velg din rolle i rederiet.' : '';
     if (msg){ err.innerHTML = ICON.warn + msg; err.hidden = false; return; }
     btn.disabled = true; btn.textContent = 'Sender …';
-    try { await remoteRpc('request_access', { p_orgnr: o, p_basis: basis.value, p_full_name: name }); state.requestSent = true; viewNoAccess(u); focusTitle(); }
+    try { await remoteRpc('request_access', { p_orgnr: o, p_basis: basis.value, p_full_name: name, p_vessel: claim ? claim.vesselId : null }); dropClaim(); state.requestSent = true; viewNoAccess(u); focusTitle(); }
     catch(ex){ btn.disabled = false; btn.textContent = 'Send søknad'; err.innerHTML = ICON.warn + (ex.code === 'offline' ? 'Du er uten nett. Prøv igjen.' : 'Noe gikk galt. Prøv igjen.'); err.hidden = false; }
   });
 }
@@ -2055,9 +2173,10 @@ async function boot(){
   document.getElementById('simulate-report')?.remove();
   document.getElementById('reset-demo')?.remove();
   const foot = document.querySelector('.site-foot p');
-  if (foot) foot.textContent = 'Fartøykontakt er under testing. Fartøyene er hentet fra Fiskeridirektoratets fartøyregister. Telefonnumre og e-post legges inn og bekreftes av rederiene selv.';
+  if (foot) foot.innerHTML = 'Fartøykontakt er under testing. Telefonnumre og e-post legges inn og bekreftes av rederiene selv.';
+  const src = document.getElementById('source-note'); if (src) src.hidden = false;
   app.innerHTML = `<div style="padding:40px 0;text-align:center" role="status"><div class="spinner"></div><p class="hint" style="margin-top:12px">Henter fartøy …</p></div>`;
-  try { await loadDirectory(); }
+  try { await loadHome(); }
   catch(e){
     app.innerHTML = `<div class="empty"><h2>Får ikke kontakt med Fartøykontakt</h2><p>Sjekk at du har nett, og prøv igjen.</p><p style="margin-top:14px"><button class="btn btn-primary" type="button" onclick="location.reload()">Prøv igjen</button></p></div>`;
     return;
@@ -2065,6 +2184,7 @@ async function boot(){
   try { await loadAdmin(); } catch(e){ console.error(e); }
   sb.auth.onAuthStateChange(event => {
     if (event !== 'SIGNED_IN' && event !== 'SIGNED_OUT') return;
+    state.requestSent = false;
     setTimeout(async () => {
       if (location.search.includes('code=')) history.replaceState(null, '', location.pathname + location.hash);
       try { await refreshAll(); } catch(e){}
@@ -2078,9 +2198,10 @@ async function boot(){
 }
 
 /* =====================================================================
-   IMPORT AV FARTØYREGISTERET (plattformadministrator, bare med Supabase)
-   Filen leses i nettleseren, så æ/ø/å blir riktige uansett om Fiskeridirektoratet
-   leverer UTF-8 eller Windows-1252. Personnavn og fødselsnummer sendes aldri videre.
+   FARTØYREGISTER (plattformadministrator, bare med Supabase)
+   Synkroniseringen kjører på serveren (Edge Function «registry-sync») hver natt kl. 04:00, eller når
+   en plattformadministrator trykker på knappen. Nettleseren sender bare innloggingstokenet; tilgangen
+   sjekkes på serveren. Første import må godkjennes etter en forhåndsvisning.
    ===================================================================== */
 const ORG_SUFFIX = /\b(As|Asa|Ans|Da|Sa|Ks|Ba|Nuf|Iks)\b/g;
 function titleCase(s){
@@ -2089,134 +2210,199 @@ function titleCase(s){
     .replace(ORG_SUFFIX, w => w.toUpperCase())
     .replace(/\s(i{2,3}|iv|vi{1,3}|ix|xi{1,2})$/i, w => w.toUpperCase());   // «Vardøyfisk Ii» → «Vardøyfisk II»
 }
-function vesselSlug(reg){
-  return String(reg || '').toLowerCase().replace(/æ/g, 'ae').replace(/ø/g, 'o').replace(/å/g, 'a')
-    .normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-}
-function decodeRegisterFile(buf){
-  try { return { text: new TextDecoder('utf-8', { fatal: true }).decode(buf), enc: 'UTF-8' }; }
-  catch(e){ return { text: new TextDecoder('windows-1252').decode(buf), enc: 'Windows-1252' }; }
-}
-function parseDelimited(text, sep){
-  const rows = []; let row = [], cur = '', q = false;
-  for (let i = 0; i < text.length; i++){
-    const ch = text[i];
-    if (q){ if (ch === '"'){ if (text[i+1] === '"'){ cur += '"'; i++; } else q = false; } else cur += ch; continue; }
-    if (ch === '"') q = true;
-    else if (ch === sep){ row.push(cur); cur = ''; }
-    else if (ch === '\n'){ row.push(cur.replace(/\r$/, '')); rows.push(row); row = []; cur = ''; }
-    else cur += ch;
-  }
-  if (cur !== '' || row.length){ row.push(cur.replace(/\r$/, '')); rows.push(row); }
-  return rows.filter(r => r.length > 1);
-}
-/* Kolonner i Fiskeridirektoratets eksport (engelsk eller norsk overskrift, samme rekkefølge) */
-function mapRegisterRows(rows){
-  const head = rows[0].map(h => h.trim().toLowerCase());
-  if (!/registration mark|registreringsmerke/.test(head[0]) || head.length < 20) throw fail('format');
-  const dash = v => (v || '').trim() === '-' ? '' : (v || '').trim();
-  const num = v => { const t = dash(v).replace(',', '.'); return t && !isNaN(Number(t)) ? t : ''; };
-  return rows.slice(1).map(r => {
-    const company = dash(r[16]).toUpperCase() === 'COMPANY';
-    const len = num(r[3]);
-    return {
-      id: vesselSlug(dash(r[0])),
-      regNr: dash(r[0]).toUpperCase(),
-      callsign: dash(r[1]).toUpperCase(),
-      name: titleCase(dash(r[2])),
-      length: len ? Number(len).toLocaleString('nb-NO', { maximumFractionDigits: 2 }) + ' m' : '',
-      width: num(r[4]),
-      enginePower: /^\d+$/.test(dash(r[5])) ? dash(r[5]) : '',
-      buildYear: /^\d{4}$/.test(dash(r[9])) ? dash(r[9]) : '',
-      registerDate: /^\d{4}-\d{2}-\d{2}$/.test(dash(r[12])) ? dash(r[12]) : '',
-      municipality: titleCase(dash(r[13])),
-      imo: dash(r[14]),
-      ownerType: company ? 'COMPANY' : 'PERSON',
-      // Personers navn, nummer og adresse sendes ikke til databasen
-      ownerName: company ? titleCase(dash(r[15])) : '',
-      orgnr: company ? dash(r[17]).replace(/\D/g, '') : '',
-      postalCode: company ? dash(r[18]) : '',
-      city: company ? titleCase(dash(r[19])) : ''
-    };
-  }).filter(x => x.regNr && x.name);
+
+async function callRegistryFunction(body){
+  let res;
+  try { res = await sb.functions.invoke('registry-sync', { body }); }
+  catch(e){ throw fail('offline'); }
+  if (!res.error) return res.data;
+  let code = 'error';
+  try { const j = await res.error.context.json(); code = j.error || code; } catch(e){ if (!navigator.onLine) code = 'offline'; }
+  throw fail(code);
 }
 
-function viewImport(){
-  state.lastRoute = 'import';
+const RUN_STATUS = { running:'Pågår', preview_ready:'Venter på godkjenning', completed:'Fullført', failed:'Feilet', superseded:'Erstattet av nyere kjøring' };
+const REVIEW_KIND = { owner_change:'Eierskifte', ambiguous_match:'Manuell kobling', missing:'Ikke lenger i registeret', validation:'Feil i data fra kilden' };
+const n0 = n => Number(n || 0).toLocaleString('nb-NO');
+function fmtStamp(iso){
+  if (!iso) return '';
+  const d = new Date(iso);
+  return d.toLocaleDateString('nb-NO', { day:'numeric', month:'long', year:'numeric', timeZone:'Europe/Oslo' }) + ' kl. ' + d.toLocaleTimeString('nb-NO', { hour:'2-digit', minute:'2-digit', timeZone:'Europe/Oslo' });
+}
+
+async function viewRegistry(){
+  state.lastRoute = 'registry';
   const u = requireUser(); if (!u) return;
+  if (location.hash === '#importer') history.replaceState(null, '', '#fartoyregister');
   if (!REMOTE || !(u.platform || u.role === 'platform')){
-    app.innerHTML = `<header class="page-head"><h1 id="page-title" tabindex="-1">Ikke tilgang</h1></header><p class="hint">Bare plattformadministratorer kan importere fartøyregisteret.</p>`;
+    app.innerHTML = `<header class="page-head"><h1 id="page-title" tabindex="-1">Ikke tilgang</h1></header><p class="hint">Bare plattformadministratorer har tilgang til fartøyregisteret.</p>`;
     return;
   }
-  const fileUrl = 'https://www.fiskeridir.no/registre/fartoyregisteret/fartoy-og-eieropplysninger';
-  app.innerHTML = `
+  const first = !app.querySelector('#reg-root');
+  if (first) app.innerHTML = `<div id="reg-root"><div style="padding:40px 0;text-align:center" role="status"><div class="spinner"></div></div></div>`;
+  let o;
+  try { o = await remoteRpc('registry_overview'); }
+  catch(e){
+    if (state.lastRoute !== 'registry') return;
+    document.getElementById('reg-root').innerHTML = `<div class="empty"><h2>Fikk ikke hentet status</h2><p>${e.code === 'offline' ? 'Du er uten nett.' : 'Prøv igjen om litt.'}</p></div>`;
+    return;
+  }
+  if (state.lastRoute !== 'registry' || !document.getElementById('reg-root')) return;
+  let preview = null;
+  if (o.preview && !o.running){ try { preview = await remoteRpc('registry_preview', { p_run: o.preview.id }); } catch(e){} }
+  renderRegistry(o, preview);
+  clearTimeout(state.regTimer);
+  if (o.running) state.regTimer = setTimeout(() => { if (state.lastRoute === 'registry') viewRegistry(); }, 4000);
+}
+
+function renderRegistry(o, preview){
+  const last = o.last, lc = (last && last.counts) || {};
+  const run = o.running;
+  const rv = o.openReviews || {};
+  const stat = (label, val, hint) => `<div class="stat"><span class="stat-v">${val}</span><span class="stat-k">${label}</span>${hint ? `<span class="hint">${hint}</span>` : ''}</div>`;
+  const status = run ? `<div class="notice notice-info" role="status">${ICON.clock}<p><strong>${run.mode === 'preview' ? 'Lager forhåndsvisning' : 'Synkroniserer'} …</strong>Hentet ${n0(run.fetched)}${run.source_total ? ` av ${n0(run.source_total)}` : ''} fartøy. Startet ${esc(fmtStamp(run.started_at))}.</p></div>`
+    : o.lastFailed ? `<div class="notice notice-err">${ICON.warn}<p><strong>Siste synkronisering feilet</strong>${esc(fmtStamp(o.lastFailed.started_at))}: ${esc(o.lastFailed.error || 'ukjent feil')}. Opplysningene fra forrige vellykkede synkronisering beholdes.</p></div>`
+    : last ? `<div class="notice notice-ok">${ICON.ok}<p><strong>Synkronisert</strong>${esc(fmtStamp(last.finished_at))}</p></div>`
+    : '';
+  const list = (title, items, fmt) => items && items.length ? `<details class="history"><summary>${title} (${items.length}${items.length >= 25 ? '+' : ''})</summary><ul class="reg-list">${items.map(x => `<li>${fmt(x)}</li>`).join('')}</ul></details>` : '';
+  const pv = o.preview && !run ? o.preview.counts || {} : null;
+
+  document.getElementById('reg-root').innerHTML = `
     <a class="back" href="#mine-fartoy">${ICON.back}Tilbake</a>
     <header class="page-head">
-      <h1 id="page-title" tabindex="-1">Importer fartøyregisteret</h1>
-      <p class="sub">Last ned fartøylisten som CSV fra <a href="${fileUrl}" target="_blank" rel="noopener">Fiskeridirektoratet</a>, og velg filen her.</p>
+      <h1 id="page-title" tabindex="-1">Fartøyregister</h1>
+      <p class="sub">Synkronisering med Fiskeridirektoratets fartøyregister. ${esc(o.schedule || '')}.</p>
     </header>
-    <div class="card stack">
-      <div class="field">
-        <label for="reg-file">Fil fra Fiskeridirektoratet (CSV)</label>
-        <input class="input" id="reg-file" type="file" accept=".csv,text/csv,text/plain">
-        <p class="hint">Importen legger til nye fartøy og oppdaterer registerdata. Telefonnumre og e-post blir aldri endret. Fartøy eid av privatpersoner får «Privat eier», uten navn.</p>
-      </div>
-      <div id="imp-preview"></div>
-      <p class="err" id="imp-err" hidden></p>
+    ${status}
+    <div class="stats">
+      ${stat('Fartøy fra registeret', n0(o.imported), o.unlinked ? `${n0(o.unlinked)} ikke koblet ennå` : '')}
+      ${stat('Nye', last ? n0(lc.new) : '–', 'siste kjøring')}
+      ${stat('Oppdatert', last ? n0(lc.updated) : '–', 'siste kjøring')}
+      ${stat('Eierskifter', last ? n0((lc.owner_auto || 0) + (lc.owner_review || 0)) : '–', rv.owner_change ? `${n0(rv.owner_change)} venter` : 'siste kjøring')}
+      ${stat('Til manuell kobling', n0(rv.ambiguous_match), '')}
+      ${stat('Feil i data', n0(rv.validation), '')}
+      ${stat('Ikke lenger i registeret', n0(o.missing), '')}
     </div>
-    <div class="card stack" style="margin-top:14px">
+
+    ${pv ? `<section class="card stack reg-preview" aria-labelledby="pv-h">
+      <h2 id="pv-h">${o.initialDone ? 'Forhåndsvisning' : 'Første import: forhåndsvisning'}</h2>
+      <p class="hint">Hentet ${esc(fmtStamp(o.preview.finished_at))}. Ingenting er endret ennå. Telefonnumre, e-post og bekreftelser fra rederiene blir aldri endret av importen.</p>
+      <ul class="pv-counts">
+        <li><strong>${n0(pv.source_total)}</strong> fartøy i Fiskeridirektoratets register</li>
+        <li><strong>${n0(pv.link)}</strong> kobles til fartøy som allerede finnes her</li>
+        <li><strong>${n0(pv.new)}</strong> nye fartøy</li>
+        <li><strong>${n0(pv.updated)}</strong> får oppdaterte registeropplysninger</li>
+        <li><strong>${n0(pv.ambiguous)}</strong> uklare treff til manuell kobling</li>
+        <li><strong>${n0(pv.owner_review)}</strong> eierskifter til gjennomgang${pv.owner_auto ? `, ${n0(pv.owner_auto)} rederi oppdateres automatisk (fartøy uten brukere)` : ''}</li>
+        ${pv.missing != null ? `<li><strong>${n0(pv.missing)}</strong> fartøy her finnes ikke i registeret og merkes (slettes ikke)</li>` : ''}
+        ${pv.validation ? `<li><strong>${n0(pv.validation)}</strong> poster med feil hoppes over</li>` : ''}
+      </ul>
+      ${preview ? `${list('Eksempler på nye fartøy', preview.new, x => `${esc(x.name)} <span class="num hint">${esc(x.reg_nr)}</span>`)}
+        ${list('Eksempler på oppdateringer', preview.updated, x => `${esc(x.name)} <span class="num hint">${esc(x.reg_nr)}</span> <span class="hint">${esc(Object.keys(x.diff || {}).join(', '))}</span>`)}
+        ${list('Uklare treff', preview.ambiguous, x => `${esc(x.name)} <span class="num hint">${esc(x.reg_nr)}</span> <span class="hint">${esc(x.note || '')}</span>`)}
+        ${list('Eierskifter til gjennomgang', preview.owner_review, x => `${esc(x.name)}: ${esc(x.from || '–')} → ${esc(x.to || '–')}`)}
+        ${list('Merkes som ikke lenger i registeret', preview.missing, x => `${esc(x.name)} <span class="num hint">${esc(x.reg_nr)}</span>`)}` : ''}
+      <p class="err" id="pv-err" hidden></p>
+      <div class="form-actions"><button type="button" class="btn btn-primary" id="pv-approve">Godkjenn og importer</button></div>
+    </section>` : ''}
+
+    <section class="card stack" style="margin-top:14px">
+      <div class="form-actions" style="margin-top:0">
+        <button type="button" class="btn ${pv ? 'btn-secondary' : 'btn-primary'}" id="reg-sync" ${run ? 'disabled' : ''}>Synkroniser med Fiskeridirektoratet</button>
+      </div>
+      <p class="hint">${o.initialDone ? 'Henter hele registeret og oppdaterer registeropplysninger. Kontaktinformasjon fra rederiene endres aldri.' : 'Første gang lages en forhåndsvisning som du må godkjenne før noe lagres.'}</p>
+      <p class="err" id="reg-err" hidden></p>
+    </section>
+
+    <section class="dash-section" aria-labelledby="rv-h">
+      <h2 id="rv-h">Til gjennomgang${o.reviews && o.reviews.length ? ` (${o.reviews.length})` : ''}</h2>
+      ${o.reviews && o.reviews.length ? `<ul class="reg-reviews">${o.reviews.map(reviewCard).join('')}</ul>` : `<p class="hint">Ingen saker.</p>`}
+    </section>
+
+    <section class="dash-section">
+      <details class="history"><summary>Kjøringer (${(o.runs || []).length})</summary>
+        <ul class="timeline">${(o.runs || []).map(r => `<li><time datetime="${esc(r.started_at)}">${esc(fmtStamp(r.started_at))}</time>
+          ${r.mode === 'preview' ? 'Forhåndsvisning' : 'Synkronisering'} (${r.trigger === 'schedule' ? 'automatisk' : 'manuell'}): ${esc(RUN_STATUS[r.status] || r.status)}
+          ${r.counts && r.counts.staged != null ? ` · ${n0(r.counts.staged)} hentet, ${n0(r.counts.new)} nye, ${n0(r.counts.updated)} oppdatert` : ''}${r.error ? ` · ${esc(r.error)}` : ''}</li>`).join('')}</ul>
+      </details>
+    </section>
+
+    <section class="card stack" style="margin-top:14px">
       <h2>Navn fra Brønnøysundregistrene</h2>
-      <p class="hint">Henter offisielle navn og status (for eksempel konkurs eller slettet) for rederier som ikke er sjekket ennå.</p>
+      <p class="hint">Hentes automatisk etter hver import. Her kan du hente navn og status (for eksempel konkurs eller slettet) for rederier som ikke er sjekket ennå.</p>
       <div id="brreg-status"></div>
       <div class="form-actions"><button type="button" class="btn btn-secondary" id="brreg-run">Hent navn fra Enhetsregisteret</button></div>
-    </div>`;
-  const prev = document.getElementById('imp-preview'), err = document.getElementById('imp-err');
-  const showErr = m => { err.innerHTML = ICON.warn + esc(m); err.hidden = false; };
-  document.getElementById('reg-file').addEventListener('change', async e => {
-    err.hidden = true; prev.innerHTML = '';
-    const f = e.target.files[0]; if (!f) return;
-    let rows, enc;
-    try {
-      const dec = decodeRegisterFile(await f.arrayBuffer()); enc = dec.enc;
-      rows = mapRegisterRows(parseDelimited(dec.text, dec.text.split('\n')[0].includes(';') ? ';' : ','));
-      if (dec.text.includes('�')) showErr('Filen mangler æ, ø og å (tegnene er allerede ødelagt). Last ned filen på nytt direkte fra Fiskeridirektoratet og velg den her uten å åpne og lagre den i et annet program.');
-    } catch(ex){ showErr('Fant ikke riktige kolonner. Bruk CSV-filen «fartøy og eieropplysninger» fra Fiskeridirektoratet.'); return; }
-    const companies = new Set(rows.filter(r => r.ownerType === 'COMPANY').map(r => r.orgnr)).size;
-    const persons = rows.filter(r => r.ownerType === 'PERSON').length;
-    prev.innerHTML = `<div class="notice notice-info">${ICON.info}<p><strong>${rows.length.toLocaleString('nb-NO')} fartøy klare</strong>
-      ${companies.toLocaleString('nb-NO')} rederier med organisasjonsnummer, ${persons} fartøy eid av privatpersoner. Tegnsett: ${enc}.
-      Eksempel: ${esc(rows.slice(0, 3).map(r => `${r.name} (${r.regNr}, ${r.municipality})`).join(', '))}.</p></div>
-      <div class="form-actions"><button type="button" class="btn btn-primary" id="imp-run">Importer ${rows.length.toLocaleString('nb-NO')} fartøy</button></div>
-      <div id="imp-progress"></div>`;
-    document.getElementById('imp-run').addEventListener('click', async ev => {
-      const b = ev.currentTarget; b.disabled = true;
-      const out = document.getElementById('imp-progress');
-      const tot = { new: 0, updated: 0, skipped: 0 };
-      try {
-        for (let i = 0; i < rows.length; i += 500){
-          out.innerHTML = `<p class="hint" role="status">Importerer ${Math.min(i + 500, rows.length).toLocaleString('nb-NO')} av ${rows.length.toLocaleString('nb-NO')} …</p>`;
-          const r = await remoteRpc('import_register', { p_rows: rows.slice(i, i + 500) });
-          tot.new += r.new; tot.updated += r.updated; tot.skipped += r.skipped;
-        }
-        await refreshAll();
-        out.innerHTML = `<div class="notice notice-ok">${ICON.ok}<p><strong>Ferdig</strong>${tot.new.toLocaleString('nb-NO')} nye fartøy, ${tot.updated.toLocaleString('nb-NO')} oppdatert${tot.skipped ? `, ${tot.skipped} hoppet over` : ''}. Søket finner dem nå.</p></div>`;
-        toast('Fartøyregisteret er importert');
-      } catch(ex){
-        b.disabled = false;
-        out.innerHTML = `<div class="notice notice-err">${ICON.warn}<p>Importen stoppet (${tot.new + tot.updated} fartøy lagret). ${ex.code === 'offline' ? 'Du er uten nett.' : ex.code === 'forbidden' ? 'Du har ikke tilgang.' : 'Prøv igjen. Det som allerede er lagret, blir bare oppdatert.'}</p></div>`;
-      }
-    });
+    </section>
+
+    <p class="source">Kilde for fartøyopplysninger: Fiskeridirektoratet, under <a href="https://data.norge.no/nlod/no/2.0" target="_blank" rel="noopener">NLOD</a>.</p>`;
+  bindRegistry(o);
+}
+
+function reviewCard(r){
+  const d = r.details || {};
+  let body = '', actions = '';
+  if (r.kind === 'owner_change'){
+    body = `<p>Registrert eier er endret fra <strong>${esc(d.from_name || '–')}</strong> til <strong>${esc(d.to_name || '–')}</strong>.</p>
+      <p class="hint">Fartøyet forvaltes av brukere i dagens rederi. Tilgang flyttes aldri automatisk. Velg «Behold» hvis rederiet forvalter fartøyet for eieren.</p>`;
+    actions = `<button type="button" class="btn btn-secondary btn-sm" data-rv="${r.id}" data-act="keep">Behold ${esc(d.from_name || 'dagens rederi')}</button>
+      <button type="button" class="btn btn-secondary btn-sm" data-rv="${r.id}" data-act="switch">Flytt til ${esc(d.to_name || 'ny eier')}</button>`;
+  } else if (r.kind === 'ambiguous_match'){
+    const rec = d.record || {};
+    body = `<p>${esc(rec.name || '')} <span class="num hint">${esc(rec.reg_nr || '')}${rec.callsign ? ' · ' + esc(rec.callsign) : ''}</span> (FARTOY_ID <span class="num">${esc(r.external_id)}</span>)</p>
+      <p class="hint">${esc(d.note || 'Flere mulige treff.')}</p>`;
+    actions = (d.candidates || []).map(c => `<button type="button" class="btn btn-secondary btn-sm" data-rv="${r.id}" data-act="link" data-vessel="${esc(c.id)}">Koble til ${esc(c.name)} (${esc(c.reg_nr || '')}${c.callsign ? ', ' + esc(c.callsign) : ''})</button>`).join('')
+      + `<button type="button" class="btn btn-secondary btn-sm" data-rv="${r.id}" data-act="create">Opprett som nytt fartøy</button>`
+      + `<button type="button" class="btn btn-ghost btn-sm" data-rv="${r.id}" data-act="dismiss">Avvis</button>`;
+  } else if (r.kind === 'missing'){
+    body = `<p>${esc(d.name || r.vessel_name || '')} <span class="num hint">${esc(d.reg_nr || r.vessel_reg || '')}</span> finnes ikke lenger i registeret. Fartøyet er merket, ikke slettet.</p>`;
+    actions = `<button type="button" class="btn btn-ghost btn-sm" data-rv="${r.id}" data-act="dismiss">Sett som behandlet</button>`;
+  } else {
+    body = `<p>${esc(d.reason || 'Ugyldig post')}${r.external_id && !r.external_id.startsWith('rad-') ? ` (FARTOY_ID <span class="num">${esc(r.external_id)}</span>)` : ''}</p>`;
+    actions = `<button type="button" class="btn btn-ghost btn-sm" data-rv="${r.id}" data-act="dismiss">Sett som behandlet</button>`;
+  }
+  return `<li class="card reg-review" data-review="${r.id}">
+    <span class="pill pill-neutral">${esc(REVIEW_KIND[r.kind] || r.kind)}</span>
+    ${r.vessel_id && r.kind !== 'missing' ? `<h3><a href="#fartoy-${esc(r.vessel_id)}">${esc(r.vessel_name || r.vessel_id)}</a></h3>` : ''}
+    ${body}
+    <div class="form-actions">${actions}</div>
+    <p class="err" hidden></p>
+  </li>`;
+}
+
+const REG_ERR = { busy:'En synkronisering pågår allerede.', forbidden:'Du har ikke tilgang.', offline:'Du er uten nett. Prøv igjen.', stale:'Forhåndsvisningen er for gammel. Lag en ny.',
+  conflict:'Fartøyet er endret i mellomtiden. Last siden på nytt.', already:'Saken er allerede behandlet.', incomplete:'Kilden svarte med for få fartøy. Ingenting er endret.' };
+function bindRegistry(o){
+  const showErr = (el, ex) => { el.innerHTML = ICON.warn + esc(REG_ERR[ex.code] || 'Noe gikk galt. Prøv igjen.'); el.hidden = false; };
+  document.getElementById('reg-sync')?.addEventListener('click', async ev => {
+    const b = ev.currentTarget; b.disabled = true; b.textContent = 'Starter …';
+    try { await callRegistryFunction({ action: 'sync' }); toast('Synkroniseringen er startet'); viewRegistry(); }
+    catch(ex){ b.disabled = false; b.textContent = 'Synkroniser med Fiskeridirektoratet'; showErr(document.getElementById('reg-err'), ex); if (ex.code === 'busy') viewRegistry(); }
   });
+  document.getElementById('pv-approve')?.addEventListener('click', async ev => {
+    const b = ev.currentTarget; b.disabled = true; b.textContent = 'Importerer …';
+    try {
+      const r = await callRegistryFunction({ action: 'approve', runId: o.preview.id });
+      toast(`Importert: ${n0(r.counts && r.counts.new)} nye, ${n0(r.counts && r.counts.link)} koblet`);
+      await refreshAll(); viewRegistry();
+    } catch(ex){ b.disabled = false; b.textContent = 'Godkjenn og importer'; showErr(document.getElementById('pv-err'), ex); }
+  });
+  app.querySelectorAll('[data-rv]').forEach(b => b.addEventListener('click', async () => {
+    const li = b.closest('.reg-review'); li.querySelectorAll('button').forEach(x => x.disabled = true);
+    try {
+      await remoteRpc('registry_resolve_review', { p_id: Number(b.dataset.rv), p_action: b.dataset.act, p_vessel: b.dataset.vessel || null });
+      toast('Saken er behandlet'); viewRegistry();
+    } catch(ex){ li.querySelectorAll('button').forEach(x => x.disabled = false); showErr(li.querySelector('.err'), ex); }
+  }));
   document.getElementById('brreg-run').addEventListener('click', async ev => {
     const b = ev.currentTarget; b.disabled = true;
     const st = document.getElementById('brreg-status');
     try {
       const list = await remoteRpc('companies_to_check');
       if (!list.length){ st.innerHTML = `<p class="hint">Alle rederier er allerede sjekket.</p>`; b.disabled = false; return; }
-      let done = 0, saved = 0;
+      let saved = 0;
       for (let i = 0; i < list.length; i += 100){
         const batch = list.slice(i, i + 100);
-        st.innerHTML = `<p class="hint" role="status">Henter ${Math.min(i + 100, list.length).toLocaleString('nb-NO')} av ${list.length.toLocaleString('nb-NO')} …</p>`;
+        st.innerHTML = `<p class="hint" role="status">Henter ${n0(Math.min(i + 100, list.length))} av ${n0(list.length)} …</p>`;
         const res = await fetch(`https://data.brreg.no/enhetsregisteret/api/enheter?organisasjonsnummer=${batch.join(',')}&size=100`);
         if (!res.ok) throw fail('brreg');
         const found = ((await res.json())._embedded || {}).enheter || [];
@@ -2228,10 +2414,8 @@ function viewImport(){
           return { orgnr: o, name: titleCase(e.navn), place: titleCase((e.forretningsadresse || e.postadresse || {}).poststed || ''), status };
         });
         saved += await remoteRpc('set_company_names', { p_rows: upd });
-        done += batch.length;
       }
-      await refreshAll();
-      st.innerHTML = `<div class="notice notice-ok">${ICON.ok}<p><strong>Ferdig</strong>${saved.toLocaleString('nb-NO')} rederier oppdatert med navn fra Enhetsregisteret.</p></div>`;
+      st.innerHTML = `<div class="notice notice-ok">${ICON.ok}<p><strong>Ferdig</strong>${n0(saved)} rederier oppdatert med navn fra Enhetsregisteret.</p></div>`;
     } catch(ex){
       st.innerHTML = `<div class="notice notice-err">${ICON.warn}<p>${ex.code === 'brreg' ? 'Fikk ikke svar fra Brønnøysundregistrene. Prøv igjen senere.' : 'Noe gikk galt. Prøv igjen; det som er hentet, er lagret.'}</p></div>`;
     }
