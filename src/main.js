@@ -186,7 +186,7 @@ const api = {
   async submitChange(vesselId, fields, showPrevious, user){
     await wait(450); requireOnline();
     const v = api.getVessel(vesselId);
-    if (!v || !user || v.companyId !== user.companyId) throw fail('forbidden');
+    if (!v || !user || !userCompanies(user).includes(v.companyId)) throw fail('forbidden');
     const at = nowISO(); const isAdmin = user.role === 'admin';
     // Avvis endringer basert på gammel visning (noen andre kan ha endret feltet i mellomtiden)
     for (const f of fields) if ((v[f.field] || '') !== (f.from || '')) throw fail('conflict');
@@ -279,7 +279,7 @@ const api = {
     if (!user) return [];
     if (user.role === 'platform' || user.platform) return db.reports.slice();
     if (user.role !== 'admin') return [];
-    return db.reports.filter(r => { const v = api.getVessel(r.vesselId); return v && v.companyId === user.companyId; });
+    return db.reports.filter(r => { const v = api.getVessel(r.vesselId); return v && userCompanies(user).includes(v.companyId); });
   },
   openReportCount(user){ return api.reportsFor(user).filter(r => r.status === 'new').length; },
   _checkReport(reportId, user){
@@ -329,7 +329,7 @@ const api = {
     await wait(300); requireOnline();
     const h = db.numberHistory.find(x => x.id === historyId);
     const v = h && api.getVessel(h.vesselId);
-    if (!h || !v || v.companyId !== user.companyId || user.role !== 'admin') throw new Error('forbidden');
+    if (!h || !v || !userCompanies(user).includes(v.companyId) || user.role !== 'admin') throw new Error('forbidden');
     h.status = status; h.verifiedAt = nowISO().slice(0,10);
     db.changes.push({ id:'c'+Date.now(), vesselId:v.id, field:'history', from:fmtPhone(h.number), to:HIST_LABEL[status], by:user.id, byName:user.name, at:nowISO(), status:'published' });
     save();
@@ -337,8 +337,10 @@ const api = {
 };
 const HIST_LABEL = { confirmed:'Bekreftet som fartøyets nummer', unconfirmed:'Ikke bekreftet', reassigned:'Tatt i bruk av andre', rejected:'Ikke fartøyets nummer' };
 function fail(code){ const e = new Error(code); e.code = code; return e; }
-function isCompanyAdmin(user, v){ return !!user && !!v && user.role === 'admin' && user.companyId === v.companyId; }
-function canManage(user, v){ return !!user && !!v && (user.role === 'platform' || user.platform || (user.role === 'admin' && user.companyId === v.companyId)); }
+/* Rederiene brukeren handler for: eget rederi og rederiene det forvalter (management) */
+function userCompanies(user){ return user && user.companyId ? [user.companyId, ...(Array.isArray(user.manages) ? user.manages : [])] : []; }
+function isCompanyAdmin(user, v){ return !!user && !!v && user.role === 'admin' && userCompanies(user).includes(v.companyId); }
+function canManage(user, v){ return !!user && !!v && (user.role === 'platform' || user.platform || (user.role === 'admin' && userCompanies(user).includes(v.companyId))); }
 function adminsOf(companyId){ return Object.values(db.users).filter(u => u.companyId === companyId && u.role === 'admin'); }
 /* Når rederiet selv retter eller bekrefter et felt, lukkes åpne meldinger om samme felt — med navn i loggen. */
 function closeReports(vesselId, field, byName, note){
@@ -1223,7 +1225,8 @@ function viewDashboard(opts = {}){
   const isPlatform = u.role === 'platform';
   const isAdmin = u.role === 'admin';
   const co = isPlatform ? null : api.company(u.companyId);
-  const vessels = co ? api.vesselsFor(co.id) : [];
+  const myCos = userCompanies(u);
+  const vessels = co ? db.vessels.filter(v => myCos.includes(v.companyId)) : [];
   const pending = db.changes.filter(c => c.status === 'pending' && vessels.some(v => v.id === c.vesselId));
   const roleName = isPlatform ? 'plattformadministrator' : isAdmin ? 'administrator' : 'medarbeider';
   const people = co ? Object.values(db.users).filter(p => p.companyId === co.id) : [];
@@ -1239,7 +1242,7 @@ function viewDashboard(opts = {}){
   app.innerHTML = `
     <header class="page-head">
       <h1 id="page-title" tabindex="-1">${isPlatform ? 'Innmeldte feil' : 'Mine fartøy'}</h1>
-      <p class="sub">${isPlatform ? 'Fartøykontakt · alle rederier' : `${esc(co.name)} · Org.nr. <span class="num">${esc(fmtOrg(co.orgnr))}</span>`}</p>
+      <p class="sub">${isPlatform ? 'Fartøykontakt · alle rederier' : `${esc(co.name)} · Org.nr. <span class="num">${esc(fmtOrg(co.orgnr))}</span>${myCos.length > 1 ? ` · forvalter fartøyene til ${myCos.length - 1 === 1 ? '1 rederi' : (myCos.length - 1) + ' rederier'}` : ''}`}</p>
       <div class="who"><span>Logget inn som <strong style="color:var(--text)">${esc(u.name)}</strong>, ${roleName}${REMOTE ? '' : ' <span class="demo-tag">Demo</span>'}</span>
         <button type="button" class="btn btn-ghost btn-sm" id="logout">Logg ut</button></div>
       ${roleSwitcher(u)}
@@ -1279,6 +1282,8 @@ function viewDashboard(opts = {}){
       </div>
     </section>` : ''}
 
+    ${isPlatform && REMOTE ? renderManagers() : ''}
+
     ${isAdmin && myMail.length ? `<section class="dash-section">
       <details class="history"><summary>Dine varsler (${myMail.length})</summary>
         <ul class="timeline">${myMail.map(m => `<li><time datetime="${esc(m.at)}">${esc(fmtDate(m.at, true))}${fmtTime(m.at)}</time>${esc(m.subject)}</li>`).join('')}</ul>
@@ -1295,6 +1300,7 @@ function viewDashboard(opts = {}){
 
   document.getElementById('logout').addEventListener('click', () => { auth.signOut(); toast('Du er logget ut'); go('sok'); });
   bindRoleSwitcher();
+  bindManagers();
   app.querySelectorAll('[data-approve],[data-reject-change]').forEach(b => b.addEventListener('click', async () => {
     const approve = !!b.dataset.approve; b.disabled = true;
     try { await api.decide(b.dataset.approve || b.dataset.rejectChange, approve, u); toast(approve ? 'Godkjent. Det nye nummeret vises nå.' : 'Endringen er avvist'); viewDashboard(); }
@@ -1320,7 +1326,7 @@ function viewDashboard(opts = {}){
 function roleChoices(u){
   if (!u || !Array.isArray(u.roles)) return [];
   const list = u.canPlatform ? [{ value:'', label:'Plattformadministrator (Fartøykontakt)' }] : [];
-  for (const r of u.roles) list.push({ value: r.companyId, label: `${r.companyName} · ${r.role === 'admin' ? 'administrator' : 'medarbeider'}` });
+  for (const r of u.roles) list.push({ value: r.companyId, label: `${r.companyName} · ${r.role === 'admin' ? 'administrator' : 'medarbeider'}${r.manages > 0 ? ` (forvalter ${r.manages === 1 ? '1 rederi' : r.manages + ' rederier'})` : ''}` });
   return list;
 }
 function roleSwitcher(u){
@@ -1353,6 +1359,63 @@ function bindRoleSwitcher(){
   });
 }
 
+/* Forvaltning (management): plattformadministrator registrerer at et selskap forvalter andre rederiers fartøy.
+   Registreres alltid for hånd. Brukerne i forvalteren får samme rettigheter som rederiets egne brukere. */
+const MGR_ERR = { forbidden:'Du har ikke tilgang.', invalid:'Sjekk organisasjonsnumrene.', required:'Legg inn minst ett rederi.', nested:'Et rederi kan ikke både forvalte og bli forvaltet.',
+  notfound:'Fant ikke forvalteren i Enhetsregisteret.', offline:'Du er uten nett. Prøv igjen.' };
+function renderManagers(){
+  const list = db.managers || [];
+  const groups = [];
+  for (const m of list){ let g = groups.find(x => x.id === m.managerId); if (!g) groups.push(g = { id:m.managerId, name:m.managerName, orgnr:m.managerOrgnr, items:[] }); g.items.push(m); }
+  return `<section class="dash-section" aria-labelledby="mgr-h" id="forvaltning">
+    <h2 id="mgr-h">Forvaltning</h2>
+    <div class="card stack">
+      <p class="hint">Et managementselskap kan forvalte fartøyene til andre rederier. Brukerne i managementselskapet får da de samme rettighetene til disse fartøyene som rederiets egne brukere. Fartøyene står fortsatt på eierselskapet. Sjekk avtalen før du legger til, og fjern koblingen når avtalen opphører. Alt logges.</p>
+      ${groups.length ? groups.map(g => `<div class="mgr-group">
+        <h3>${esc(g.name)} <span class="hint">· Org.nr. <span class="num">${esc(fmtOrg(g.orgnr))}</span></span></h3>
+        <ul class="mgr-list">${g.items.map(m => `<li><span>${esc(m.companyName)} <span class="hint">· <span class="num">${esc(fmtOrg(m.companyOrgnr))}</span> · ${m.vessels === 1 ? '1 fartøy' : m.vessels + ' fartøy'}</span></span>
+          <button type="button" class="btn btn-ghost btn-sm" data-mgr-remove="${esc(m.managerId)}|${esc(m.companyId)}">Fjern</button></li>`).join('')}</ul>
+      </div>`).join('') : '<p class="hint">Ingen forvaltning er registrert.</p>'}
+      <form id="mgr-form" class="stack" novalidate>
+        <div class="field"><label for="mgr-org">Forvalter (org.nr.)</label><input class="input num" id="mgr-org" inputmode="numeric" autocomplete="off" placeholder="9 siffer"></div>
+        <div class="field"><label for="mgr-cos">Rederier som forvaltes (org.nr., ett per linje)</label><textarea class="input num" id="mgr-cos" rows="4"></textarea></div>
+        <div class="field"><label for="mgr-note">Merknad (valgfritt)</label><input class="input" id="mgr-note" maxlength="300" placeholder="For eksempel: managementavtale bekreftet på e-post"></div>
+        <p class="err" id="mgr-err" hidden></p>
+        <div class="form-actions"><button type="submit" class="btn btn-primary">Legg til forvaltning</button></div>
+      </form>
+    </div>
+  </section>`;
+}
+function bindManagers(){
+  const form = document.getElementById('mgr-form');
+  if (!form) return;
+  const err = document.getElementById('mgr-err');
+  const showErr = msg => { err.innerHTML = ICON.warn + esc(msg); err.hidden = false; };
+  form.addEventListener('submit', async e => {
+    e.preventDefault(); err.hidden = true;
+    const org = document.getElementById('mgr-org').value.replace(/\D/g, '');
+    const cos = document.getElementById('mgr-cos').value.split(/[\n,;]+/).map(x => x.replace(/\D/g, '')).filter(Boolean);
+    if (!/^\d{9}$/.test(org)) return showErr('Forvalterens organisasjonsnummer må ha 9 siffer.');
+    if (!cos.length || cos.some(x => !/^\d{9}$/.test(x))) return showErr('Alle rederier må ha organisasjonsnummer med 9 siffer.');
+    const btn = form.querySelector('button[type=submit]'); btn.disabled = true;
+    try {
+      let name = null;
+      try { name = titleCase((await registry.lookupOrg(org)).name); } catch(ex){}
+      const r = await api.addManagers(org, name, cos, document.getElementById('mgr-note').value.trim());
+      toast(`${r.added === 1 ? '1 rederi' : r.added + ' rederier'} lagt til${r.already ? `, ${r.already} fantes fra før` : ''}`);
+      viewDashboard();
+      if (r.missing && r.missing.length) setTimeout(() => showErrAfter(`Finnes ikke i Fartøykontakt: ${r.missing.map(fmtOrg).join(', ')}`), 0);
+    } catch(ex){ btn.disabled = false; showErr(MGR_ERR[ex.code] || 'Noe gikk galt. Prøv igjen.'); }
+  });
+  const showErrAfter = msg => { const el = document.getElementById('mgr-err'); if (el){ el.innerHTML = ICON.warn + esc(msg); el.hidden = false; } };
+  document.querySelectorAll('[data-mgr-remove]').forEach(b => b.addEventListener('click', async () => {
+    if (!b.dataset.armed){ b.dataset.armed = '1'; b.textContent = 'Bekreft fjerning'; b.classList.add('btn-danger'); return; }
+    const [mid, cid] = b.dataset.mgrRemove.split('|'); b.disabled = true;
+    try { await api.removeManager(mid, cid); toast('Forvaltningen er fjernet'); viewDashboard(); }
+    catch(ex){ b.disabled = false; toast(MGR_ERR[ex.code] || 'Noe gikk galt. Prøv igjen.'); }
+  }));
+}
+
 /* =====================================================================
    MINE FARTØY — status og «Bekreft kontaktinformasjon»
    ===================================================================== */
@@ -1382,7 +1445,7 @@ function vesselRow(v, u){
   return `<li class="vrow" data-vessel="${esc(v.id)}">
     <div class="vrow-main">
       <h3>${esc(v.name)}</h3>
-      <p class="meta"><span class="num">${esc(v.regNr)}</span></p>
+      <p class="meta"><span class="num">${esc(v.regNr)}</span>${u && v.companyId !== u.companyId ? ` · ${esc(api.company(v.companyId)?.name || '')}` : ''}</p>
       <p class="vstate ${cls}">${head}</p>
       ${line ? `<p class="hint">${line}</p>` : ''}
       ${remind}
@@ -1722,9 +1785,9 @@ function viewEdit(id){
   state.lastRoute = 'edit';
   const u = requireUser(); if (!u) return;
   const v = api.getVessel(id);
-  if (!v || v.companyId !== u.companyId){
+  if (!v || !userCompanies(u).includes(v.companyId)){
     app.innerHTML = `<header class="page-head"><h1 id="page-title" tabindex="-1">Du har ikke tilgang til dette fartøyet</h1></header>
-      <p class="hint">Du kan bare endre fartøy som hører til ditt rederi.</p><p style="margin-top:16px"><a class="btn btn-secondary" href="#mine-fartoy">Til Mine fartøy</a></p>`;
+      <p class="hint">Du kan bare endre fartøy som hører til ditt rederi, eller rederier dere forvalter.</p><p style="margin-top:16px"><a class="btn btn-secondary" href="#mine-fartoy">Til Mine fartøy</a></p>`;
     return;
   }
   const isAdmin = u.role === 'admin';
@@ -2041,7 +2104,7 @@ async function loadAdmin(){
   db.session = ctx.id;
   if (ctx.role === 'none'){ clear(); return; }
   const a = await remoteRpc('get_admin_data');
-  db.reports = a.reports; db.changes = a.changes; db.outbox = a.outbox;
+  db.reports = a.reports; db.changes = a.changes; db.outbox = a.outbox; db.managers = a.managers || [];
   for (const u of a.users) if (!db.users[u.id]) db.users[u.id] = u;
   cache.adminHistory = a.numberHistory || [];
   cache.pinned.clear();
@@ -2091,6 +2154,11 @@ function installRemote(){
   };
   api.rejectReport = async (reportId, reason) => { await remoteRpc('reject_report', { p_report: reportId, p_reason: reason || '' }); await refreshAll(); };
   api.setNumberStatus = async (historyId, status) => { await remoteRpc('set_number_status', { p_history: historyId, p_status: status }); await refreshAll(); };
+  api.addManagers = async (managerOrgnr, managerName, companyOrgnrs, note) => {
+    const r = await remoteRpc('add_company_managers', { p_manager_orgnr: managerOrgnr, p_manager_name: managerName || null, p_company_orgnrs: companyOrgnrs, p_note: note || null });
+    await refreshAll(); return r;
+  };
+  api.removeManager = async (managerId, companyId) => { await remoteRpc('remove_company_manager', { p_manager: managerId, p_company: companyId }); await refreshAll(); };
   api.setActingRole = async companyId => { await remoteRpc('set_acting_role', { p_company: companyId }); await refreshAll(); };
   api.setVerifyMonths = async months => { await remoteRpc('set_verify_months', { p_months: Number(months) }); await refreshAll(); };
 

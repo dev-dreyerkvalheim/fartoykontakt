@@ -411,3 +411,6 @@ details.history summary::marker{color:var(--salvie)}
 .source-note a,.source a{color:inherit;text-decoration:underline;text-underline-offset:2px}
 .notice b{font-weight:500;color:var(--text)}
 .callbar .num{font-family:var(--font);font-weight:500;letter-spacing:0}
+.mgr-group h3{font-size:16px;margin:4px 0 8px}
+.mgr-list{list-style:none;margin:0 0 8px;padding:0;display:grid;gap:6px}
+.mgr-list li{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:8px 12px;border:1px solid var(--border);border-radius:var(--r-sm);flex-wrap:wrap}

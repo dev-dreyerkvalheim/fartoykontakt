@@ -16,7 +16,7 @@ await pg.exec(`create schema auth; create table auth.users(id uuid primary key, 
 create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
 create function auth.jwt() returns jsonb language sql stable as $$ select coalesce(nullif(current_setting('request.jwt.claims', true), ''), '{}')::jsonb $$;
 create role anon; create role authenticated; create role service_role bypassrls;`);
-for (const f of ['migrations/20261027000001_schema.sql', 'migrations/20261027000002_functions.sql', 'migrations/20261027000003_hardening.sql', 'seed.sql', 'migrations/20261027000004_register_import.sql', 'migrations/20261028000005_fiskeridir_sync.sql', 'migrations/20261028000007_registry_perf.sql', 'migrations/20261028000008_acting_role.sql']) await pg.exec(fs.readFileSync(R + f, 'utf8'));
+for (const f of ['migrations/20261027000001_schema.sql', 'migrations/20261027000002_functions.sql', 'migrations/20261027000003_hardening.sql', 'seed.sql', 'migrations/20261027000004_register_import.sql', 'migrations/20261028000005_fiskeridir_sync.sql', 'migrations/20261028000007_registry_perf.sql', 'migrations/20261028000008_acting_role.sql', 'migrations/20261028000009_company_managers.sql']) await pg.exec(fs.readFileSync(R + f, 'utf8'));
 const U = { kari:'11111111-1111-1111-1111-111111111111', jonas:'22222222-2222-2222-2222-222222222222', ola:'44444444-4444-4444-4444-444444444444', ny:'66666666-6666-6666-6666-666666666666', per:'77777777-7777-7777-7777-777777777777' };
 for (const [n, id] of Object.entries(U)) await pg.query(`insert into auth.users values ($1,$2)`, [id, n + '@eksempel.no']);
 await pg.exec(`select grant_membership('kari@eksempel.no','froyanes','admin','Kari Nordvik'); select grant_membership('jonas@eksempel.no','froyanes','member','Jonas Vik'); select make_platform_admin('ola@eksempel.no','Ola Drift');`);
@@ -47,7 +47,8 @@ const mockClient = () => ({
     rpcCount++; rpcNames.push(fn);
     await pg.query(`select set_config('request.jwt.claim.sub', $1, false), set_config('request.jwt.claims', $2, false)`, [current ? U[current] : '', current ? JSON.stringify({ email: current + '@eksempel.no' }) : '']);
     const keys = Object.keys(args);
-    const params = keys.map(k => args[k] !== null && typeof args[k] === 'object' ? JSON.stringify(args[k]) : args[k]);
+    const pgArr = a => '{' + a.map(x => '"' + String(x).replace(/["\\]/g, '\\$&') + '"').join(',') + '}';
+    const params = keys.map(k => Array.isArray(args[k]) && args[k].every(x => typeof x === 'string') ? pgArr(args[k]) : args[k] !== null && typeof args[k] === 'object' ? JSON.stringify(args[k]) : args[k]);
     try { const r = await pg.query(`select ${fn}(${keys.map((k, i) => `${k} => $${i + 1}`).join(', ')}) as r`, params); return { data: r.rows[0].r, error: null }; }
     catch (e) { return { data: null, error: { message: e.message } }; }
   },
@@ -203,6 +204,42 @@ rs().value = ''; rs().dispatchEvent(new w.Event('change', { bubbles:true })); aw
 ok(app().querySelector('h1').textContent === 'Innmeldte feil' && !!app().querySelector('a[href="#fartoyregister"]'), 'Tilbake til plattformadministrator');
 await pg.query(`select set_config('request.jwt.claim.sub', '', false)`);
 await pg.query(`delete from acting_roles`); await pg.query(`delete from memberships where user_id=$1`, [U.ola]);
+await w.eval('refreshAll()');
+
+// Forvaltning: plattformadmin registrerer et managementselskap
+U.mona = '88888888-8888-8888-8888-888888888888';
+await pg.query(`insert into auth.users values ($1, 'mona@eksempel.no')`, [U.mona]);
+const realFetch = w.fetch; w.fetch = async url => String(url).includes('brreg') ? { ok: true, json: async () => ({ navn: 'FORVALTER TEST AS' }) } : { ok: false };
+await go('mine-fartoy');
+ok(!!d.getElementById('mgr-form') && app().textContent.includes('Ingen forvaltning er registrert'), 'Forvaltning: panelet vises for plattformadministrator');
+d.getElementById('mgr-org').value = '000 000 123';
+d.getElementById('mgr-cos').value = '000444555\n000 555 666\n999999999';
+d.getElementById('mgr-note').value = 'Testavtale';
+d.getElementById('mgr-form').dispatchEvent(new w.Event('submit', { cancelable:true, bubbles:true })); await sleep(900);
+ok((await pg.query(`select count(*)::int n from company_managers where manager_id='org-000000123'`)).rows[0].n === 2 && (await pg.query(`select name from companies where id='org-000000123'`)).rows[0]?.name === 'Forvalter Test AS', 'Forvaltning: lagret, forvalter opprettet med navn fra Enhetsregisteret');
+ok(app().textContent.includes('Forvalter Test AS') && app().textContent.includes('Havbris AS') && app().textContent.includes('Kvitholmen Kystfiske AS'), 'Forvaltning: listen viser koblingene');
+ok(d.getElementById('mgr-err')?.textContent.includes('999 999 999'), 'Forvaltning: ukjent org.nr. rapporteres');
+w.fetch = realFetch;
+await pg.query(`select set_config('request.jwt.claim.sub', '', false)`);
+await pg.exec(`select grant_membership('mona@eksempel.no','org-000000123','admin','Mona Manager')`);
+current = null; fire('SIGNED_OUT'); await sleep(300);
+await login('mona'); await go('mine-fartoy');
+ok(app().querySelector('h1').textContent === 'Mine fartøy' && app().textContent.includes('forvalter fartøyene til 2 rederier'), 'Forvalter: Mine fartøy med forvaltede rederier');
+const mRows = [...app().querySelectorAll('.vrow')].map(r => r.dataset.vessel);
+ok(mRows.includes('havbris') && mRows.includes('kvitholmen') && !mRows.includes('froyanes') && app().querySelector('.vrow[data-vessel="havbris"] .meta').textContent.includes('Havbris AS'), 'Forvalter: fartøyene vises med eierselskap');
+app().querySelector('.vrow[data-vessel="havbris"] [data-verify]').click(); await sleep(100);
+app().querySelector('[data-vok]').click(); await sleep(700);
+ok((await pg.query(`select by_name from changes where vessel_id='havbris' and field='confirm' order by at desc limit 1`)).rows[0]?.by_name === 'Mona Manager', 'Forvalter: kan bekrefte kontaktinformasjon');
+await go('rediger-kvitholmen');
+ok(!app().textContent.includes('Du har ikke tilgang'), 'Forvalter: kan åpne fartøyet for redigering');
+current = null; fire('SIGNED_OUT'); await sleep(300);
+await login('ola'); await go('mine-fartoy');
+const rm = app().querySelector('[data-mgr-remove="org-000000123|havbris"]'); rm.click(); await sleep(50);
+ok(rm.textContent === 'Bekreft fjerning', 'Forvaltning: fjerning må bekreftes');
+rm.click(); await sleep(700);
+ok((await pg.query(`select count(*)::int n from company_managers`)).rows[0].n === 1 && (await pg.query(`select count(*)::int n from company_manager_log where action='removed'`)).rows[0].n === 1, 'Forvaltning: fjernet og logget');
+await pg.query(`select set_config('request.jwt.claim.sub', '', false)`);
+await pg.query(`delete from company_managers`); await pg.query(`delete from memberships where user_id=$1`, [U.mona]);
 await w.eval('refreshAll()');
 
 // Nytt fartøy uten kontaktinformasjon, søk og kilde

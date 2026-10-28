@@ -21,6 +21,7 @@ await db.exec(fs.readFileSync(R + 'migrations/20261027000004_register_import.sql
 await db.exec(fs.readFileSync(R + 'migrations/20261028000005_fiskeridir_sync.sql', 'utf8'));
 await db.exec(fs.readFileSync(R + 'migrations/20261028000007_registry_perf.sql', 'utf8'));
 await db.exec(fs.readFileSync(R + 'migrations/20261028000008_acting_role.sql', 'utf8'));
+await db.exec(fs.readFileSync(R + 'migrations/20261028000009_company_managers.sql', 'utf8'));
 await db.exec(fs.readFileSync(R + 'seed.sql', 'utf8'));
 const U = { kari:'11111111-1111-1111-1111-111111111111', jonas:'22222222-2222-2222-2222-222222222222', per:'33333333-3333-3333-3333-333333333333', ola:'44444444-4444-4444-4444-444444444444', berg:'55555555-5555-5555-5555-555555555555' };
 for (const [n, id] of Object.entries(U)) await db.query(`insert into auth.users values ($1, $2)`, [id, n + '@eksempel.no']);
@@ -199,12 +200,54 @@ ok(!(await call(`select verify_vessel('froyvik', $1::jsonb)`, [JSON.stringify(aw
 await as(null); await db.query(`delete from memberships where user_id=$1`, [U.ola]); await db.query(`delete from acting_roles`);
 await as('ola'); ok((await one(`select my_context() c`)).c.role === 'platform', 'Rolle: plattformadmin uten rederi som før');
 
+// Forvaltning: et managementselskap forvalter fartøyene til andre rederier
+U.mona = '88888888-8888-8888-8888-888888888888';
+await as(null); await db.query(`insert into auth.users values ($1, 'mona@eksempel.no')`, [U.mona]);
+await as('kari');
+ok((await call(`select add_company_managers('000000123', 'Forvalter Test AS', array['000444555'])`)).err === 'forbidden', 'Forvaltning: bare plattformadministrator kan registrere');
+await as('ola');
+let am = (await one(`select add_company_managers('000 000 123', 'Forvalter Test AS', array['000444555','000555666','999999999'], 'Managementavtale') r`)).r;
+ok(am.added === 2 && am.missing.length === 1 && am.missing[0] === '999999999' && am.managerId === 'org-000000123', 'Forvaltning: 2 rederier lagt til, ukjent org.nr. rapporteres (' + JSON.stringify(am) + ')');
+ok((await one(`select source, name from companies where id='org-000000123'`)).source === 'system', 'Forvaltning: forvalteren opprettes som rederi');
+am = (await one(`select add_company_managers('000000123', null, array['000444555']) r`)).r;
+ok(am.added === 0 && am.already === 1, 'Forvaltning: ingen duplikater');
+ok((await call(`select add_company_managers('000444555', null, array['000111222'])`)).err === 'nested', 'Forvaltning: et forvaltet rederi kan ikke være forvalter');
+ok((await call(`select add_company_managers('000111222', null, array['000000123'])`)).err === 'nested', 'Forvaltning: en forvalter kan ikke forvaltes');
+ok((await call(`select add_company_managers('000000123', null, array['000000123'])`)).err === 'invalid', 'Forvaltning: kan ikke forvalte seg selv');
+ok((await one(`select count(*)::int n from company_managers`)).n === 2 && (await one(`select count(*)::int n from company_manager_log where action='added'`)).n === 2, 'Forvaltning: logget');
+await as(null); await call(`select grant_membership('mona@eksempel.no','org-000000123','admin','Mona Manager')`);
+await as('mona');
+const mc = (await one(`select my_context() c`)).c;
+ok(mc.role === 'admin' && mc.companyId === 'org-000000123' && mc.manages.length === 2 && mc.roles[0].manages === 2, 'Forvaltning: konteksten viser forvaltede rederier');
+const ma = (await one(`select get_admin_data() a`)).a;
+const maIds = ma.cards.vessels.map(v => v.id);
+ok(maIds.includes('havbris') && maIds.includes('kvitholmen') && !maIds.includes('froyanes'), 'Forvaltning: admindata med fartøyene til de forvaltede rederiene');
+ok(ma.managers.length === 0, 'Forvaltning: forvalteren ser ikke plattformoversikten');
+const verM = (await one(`select count(*)::int n from verifications where scope_id='havbris'`)).n;
+ok(!(await call(`select verify_vessel('havbris', $1::jsonb)`, [JSON.stringify(await exp('havbris'))])).err && (await one(`select count(*)::int n from verifications where scope_id='havbris'`)).n > verM, 'Forvaltning: forvalter kan bekrefte');
+ok((await one(`select by_name from changes where vessel_id='havbris' and field='confirm' order by at desc limit 1`)).by_name === 'Mona Manager', 'Forvaltning: bekreftelsen logges med forvalterens navn');
+ok((await call(`select verify_vessel('froyanes', $1::jsonb)`, [JSON.stringify(await exp('froyanes'))])).err === 'forbidden', 'Forvaltning: ingen tilgang til andre rederier');
+const sc = (await one(`select submit_change('kvitholmen', $1::jsonb) r`, [JSON.stringify([{ field: 'email', from: '', to: 'bro@kvitholmen.eksempel.no' }])])).r;
+ok(sc.published === true && (await one(`select email from vessels where id='kvitholmen'`)).email === 'bro@kvitholmen.eksempel.no', 'Forvaltning: forvalter kan endre kontaktinfo');
+ok((await one(`select company_id from vessels where id='havbris'`)).company_id === 'havbris', 'Forvaltning: fartøyet tilhører fortsatt eierselskapet');
+await as(null); await call(`select submit_report('havbris','bridgePhone','Feil nummer','','','')`);
+ok((await one(`select count(*)::int n from outbox where to_email='mona@eksempel.no' and key='reports:havbris'`)).n === 1, 'Forvaltning: forvalteren varsles om innmeldte feil');
+ok((await one(`select _vessel_is_managed('x', 'havbris', 'y') m`)).m === true, 'Forvaltning: synkroniseringen regner fartøyet som i bruk');
+await as('ola'); ok((await one(`select get_admin_data() a`)).a.managers.length === 2, 'Forvaltning: plattformadministrator ser oversikten');
+ok((await call(`select remove_company_manager('org-000000123', 'havbris', 'Avtale avsluttet')`)).rows, 'Forvaltning: kobling fjernet');
+await as('mona');
+ok((await call(`select verify_vessel('havbris', $1::jsonb)`, [JSON.stringify(await exp('havbris'))])).err === 'forbidden', 'Forvaltning: tilgangen forsvinner når koblingen fjernes');
+await as(null);
+ok((await one(`select count(*)::int n from company_manager_log where action='removed' and note='Avtale avsluttet'`)).n === 1, 'Forvaltning: fjerning logget');
+await db.exec(`delete from company_managers; delete from memberships where user_id='${U.mona}'`);
+
 await db.query(`insert into acting_roles(user_id, company_id) values ($1, null)`, [U.ola]);
 // RLS: direkte tabellesing som anon
 await db.exec(`grant usage on schema public to anon, authenticated; grant select on all tables in schema public to anon, authenticated;`);
 await as(null); await db.exec(`set role anon`);
 ok((await db.query(`select count(*)::int n from verifications`)).rows[0].n === 0, 'RLS: anon kan ikke lese bekreftelser direkte');
 ok((await db.query(`select count(*)::int n from acting_roles`)).rows[0].n === 0, 'RLS: anon kan ikke lese rollevalg');
+ok((await db.query(`select count(*)::int n from company_manager_log`)).rows[0].n === 0, 'RLS: anon kan ikke lese forvaltningsloggen');
 
 let rr = ''; try { rr = (await db.query(`select count(*)::int n from reports`)).rows[0].n; } catch (e) { rr = 'nektet'; }
 ok(rr === 0 || rr === 'nektet', 'RLS: anon kan ikke lese meldinger (' + rr + ')');

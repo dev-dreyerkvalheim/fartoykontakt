@@ -32,6 +32,7 @@ Siden har to modi:
    6. `supabase/migrations/20261028000006_registry_schedule.sql` (nattlig kjøring; krever pg_net, pg_cron og Vault. Endre adressen til Edge Function i filen hvis prosjektet har en annen URL.)
    7. `supabase/migrations/20261028000007_registry_perf.sql`
    8. `supabase/migrations/20261028000008_acting_role.sql` (rollevelger)
+   9. `supabase/migrations/20261028000009_company_managers.sql` (forvaltning/management)
 
    `supabase/seed.sql` inneholder oppdiktede demofartøy og brukes bare i testene og ved lokal utvikling. Ikke kjør den i produksjon.
 3. Gå til **Authentication → URL Configuration**:
@@ -67,6 +68,15 @@ En plattformadministrator kan også få tilgang til et rederi med `grant_members
 - Som **rederiet**: samme rettigheter som andre administratorer i rederiet, også «Bekreft kontaktinformasjon». Rettighetene i rederiet gjelder bare mens rederiet er valgt.
 
 Valget lagres i databasen (`acting_roles`) og sjekkes der, ikke i nettleseren. Loggen viser rollen: «Navn (plattformadministrator)» eller navnet i rederiet.
+
+### 6. Forvaltning (management)
+Et managementselskap kan forvalte fartøyene til flere eierselskap. Plattformadministrator registrerer det under **Mine fartøy → Forvaltning**: forvalterens org.nr. og org.nr. til rederiene som forvaltes. Finnes ikke forvalteren i Fartøykontakt, opprettes den med navnet fra Enhetsregisteret.
+- Brukerne i managementselskapet får samme rettigheter til fartøyene som eierselskapets egne brukere, og varsles om innmeldte feil.
+- Fartøyene står fortsatt på eierselskapet. Offentlige sider og synkroniseringen er uendret.
+- Forvaltning gis aldri automatisk. Koblinger og fjerning logges i `company_manager_log`.
+- Ett nivå: et rederi kan ikke både forvalte og bli forvaltet.
+
+Deretter gis personer tilgang til managementselskapet med `grant_membership` som vanlig.
 
 ### 5. Fartøyregisteret (Fiskeridirektoratet)
 Fartøyene hentes fra Fiskeridirektoratets åpne API (`https://api.fiskeridir.no/vessel-api/api/v1/vessels`, lisens [NLOD](https://data.norge.no/nlod/no/2.0)).
