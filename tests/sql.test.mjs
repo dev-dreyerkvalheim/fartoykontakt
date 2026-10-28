@@ -22,6 +22,7 @@ await db.exec(fs.readFileSync(R + 'migrations/20261028000005_fiskeridir_sync.sql
 await db.exec(fs.readFileSync(R + 'migrations/20261028000007_registry_perf.sql', 'utf8'));
 await db.exec(fs.readFileSync(R + 'migrations/20261028000008_acting_role.sql', 'utf8'));
 await db.exec(fs.readFileSync(R + 'migrations/20261028000009_company_managers.sql', 'utf8'));
+await db.exec(fs.readFileSync(R + 'migrations/20261028000010_manager_badge.sql', 'utf8'));
 await db.exec(fs.readFileSync(R + 'seed.sql', 'utf8'));
 const U = { kari:'11111111-1111-1111-1111-111111111111', jonas:'22222222-2222-2222-2222-222222222222', per:'33333333-3333-3333-3333-333333333333', ola:'44444444-4444-4444-4444-444444444444', berg:'55555555-5555-5555-5555-555555555555' };
 for (const [n, id] of Object.entries(U)) await db.query(`insert into auth.users values ($1, $2)`, [id, n + '@eksempel.no']);
@@ -230,6 +231,8 @@ ok((await call(`select verify_vessel('froyanes', $1::jsonb)`, [JSON.stringify(aw
 const sc = (await one(`select submit_change('kvitholmen', $1::jsonb) r`, [JSON.stringify([{ field: 'email', from: '', to: 'bro@kvitholmen.eksempel.no' }])])).r;
 ok(sc.published === true && (await one(`select email from vessels where id='kvitholmen'`)).email === 'bro@kvitholmen.eksempel.no', 'Forvaltning: forvalter kan endre kontaktinfo');
 ok((await one(`select company_id from vessels where id='havbris'`)).company_id === 'havbris', 'Forvaltning: fartøyet tilhører fortsatt eierselskapet');
+await as(null); ok((await one(`select get_vessel_public('havbris') c`)).c.companies[0].managedBy === 'Forvalter Test AS', 'Forvaltning: offentlig kort viser hvem som forvalter');
+ok(!JSON.stringify((await one(`select get_vessel_public('froyanes') c`)).c).includes('managedBy'), 'Forvaltning: ikke forvaltede rederier uten merke'); await as('mona');
 await as(null); await call(`select submit_report('havbris','bridgePhone','Feil nummer','','','')`);
 ok((await one(`select count(*)::int n from outbox where to_email='mona@eksempel.no' and key='reports:havbris'`)).n === 1, 'Forvaltning: forvalteren varsles om innmeldte feil');
 ok((await one(`select _vessel_is_managed('x', 'havbris', 'y') m`)).m === true, 'Forvaltning: synkroniseringen regner fartøyet som i bruk');

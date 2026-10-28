@@ -940,7 +940,7 @@ function viewVessel(id){
     <header class="page-head">
       <h1 id="page-title" tabindex="-1">${esc(v.name)}</h1>
       <p class="sub">${esc([c.name, v.type].filter(Boolean).join(' · '))}</p>
-      <div class="badges">${vv.state === 'unclaimed' ? statusPill(v) : ''}${newNumberPill(v)}</div>
+      <div class="badges">${vv.state === 'unclaimed' ? statusPill(v) : ''}${newNumberPill(v)}${c.managedBy ? `<span class="pill pill-neutral pill-mgr">Forvaltes av ${esc(c.managedBy)}</span>` : ''}</div>
     </header>
 
     ${cameFrom ? (cameFrom.status === 'confirmed'
@@ -975,6 +975,7 @@ function viewVessel(id){
       ${c.status ? `<div class="notice notice-warn" style="margin-top:10px">${ICON.warn}<p>Enhetsregisteret: ${esc(c.status)}</p></div>` : ''}
       <div class="rows" style="margin-top:8px">
         <div class="row"><div class="row-main"><div class="k">Navn</div><div class="v">${esc(c.name)}</div></div></div>
+        ${c.managedBy ? `<div class="row"><div class="row-main"><div class="k">Forvaltes av</div><div class="v">${esc(c.managedBy)}</div></div></div>` : ''}
         ${c.phone ? `<div class="row"><div class="row-main"><div class="k">Telefon ${tagFor('co.phone')}</div><a class="v num phone-link" href="${esc(telHref(c.phone))}" tabindex="-1">${esc(fmtPhone(c.phone))}</a></div>
           <div class="row-actions">${callButtons(c.phone, c.name, { size:'btn-sm', primary:false })}</div></div>` : ''}
         ${c.email ? `<div class="row"><div class="row-main"><div class="k">E-post ${tagFor('co.email')}</div><div class="v">${esc(c.email)}</div></div>
