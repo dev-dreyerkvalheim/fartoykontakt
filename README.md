@@ -10,6 +10,7 @@ Dette er en testversjon. Fartøyene kommer fra Fiskeridirektoratets fartøyregis
 |---|---|
 | `index.html`, `src/` | Nettsiden (vanlig JavaScript, bygget med Vite) |
 | `supabase/migrations/` | Tabeller, tilgangsregler (RLS) og funksjoner |
+| `supabase/functions/registry-sync/` | Edge Function som synkroniserer med Fiskeridirektoratets fartøyregister |
 | `supabase/seed.sql` | Demodata (oppdiktet) |
 | `tests/` | Tester av databasen og hele nettsiden mot en lokal Postgres |
 
@@ -27,6 +28,8 @@ Siden har to modi:
    2. `supabase/migrations/20261027000002_functions.sql`
    3. `supabase/migrations/20261027000003_hardening.sql`
    4. `supabase/migrations/20261027000004_register_import.sql`
+   5. `supabase/migrations/20261028000005_fiskeridir_sync.sql`
+   6. `supabase/migrations/20261028000006_registry_schedule.sql` (nattlig kjøring; krever pg_net, pg_cron og Vault. Endre adressen til Edge Function i filen hvis prosjektet har en annen URL.)
 
    `supabase/seed.sql` inneholder oppdiktede demofartøy og brukes bare i testene og ved lokal utvikling. Ikke kjør den i produksjon.
 3. Gå til **Authentication → URL Configuration**:
@@ -56,12 +59,22 @@ select grant_membership('tester@firma.no', 'org-998076803', 'admin', 'Navn Navne
 ```
 Rederier fra registeret har id `org-<organisasjonsnummer>`. Søknader om tilgang ligger i tabellen `access_requests`.
 
-### 5. Importer fartøyregisteret
-1. Last ned fartøylisten som CSV fra [Fiskeridirektoratet](https://www.fiskeridir.no/registre/fartoyregisteret/fartoy-og-eieropplysninger). Ikke åpne og lagre den i Excel først.
-2. Logg inn som plattformadministrator, gå til **Mine fartøy → Importer fartøyregisteret** (adresse `#importer`), og velg filen.
-3. Trykk **Hent navn fra Enhetsregisteret** for offisielle rederinavn og status (konkurs, slettet).
+### 5. Fartøyregisteret (Fiskeridirektoratet)
+Fartøyene hentes fra Fiskeridirektoratets åpne API (`https://api.fiskeridir.no/vessel-api/api/v1/vessels`, lisens [NLOD](https://data.norge.no/nlod/no/2.0)).
 
-Importen kan kjøres på nytt når registeret oppdateres. Den endrer aldri telefonnumre eller e-post, og lagrer ikke navn på private eiere.
+1. Publiser Edge Function: `supabase functions deploy registry-sync --no-verify-jwt` (funksjonen sjekker selv hvem som kaller).
+2. Logg inn som plattformadministrator og gå til **Mine fartøy → Fartøyregister** (`#fartoyregister`).
+3. Trykk **Synkroniser med Fiskeridirektoratet**. Første gang lages en forhåndsvisning. Se gjennom tallene og trykk **Godkjenn og importer**.
+4. Etter det kjører synkroniseringen automatisk hver natt kl. 04:00 norsk tid (pg_cron kl. 02 og 03 UTC; funksjonen går bare videre når klokken er 04 i Norge).
+
+Regler:
+- `FARTOY_ID` er fartøyets faste ID (`vessel_identifiers`, lagret som tekst med ledende nuller). Eksisterende fartøy kobles på registreringsmerke **og** kallesignal eller navn, aldri på navn alene. Uklare treff går til **Til gjennomgang**.
+- Synkroniseringen endrer aldri telefonnumre, e-post, gamle numre, innmeldte feil, bekreftelser eller tilganger.
+- Eierskifte på et fartøy som er i bruk, blir en sak til gjennomgang. Tilgang flyttes aldri automatisk.
+- Fartøy som forsvinner fra registeret, merkes, men slettes ikke. Ved feil eller ufullstendig svar endres ingenting.
+- Navn på private eiere lagres ikke.
+
+Kjøre en forhåndsvisning manuelt fra SQL Editor: `select registry_cron_tick(true, 'preview');`
 
 ## Lokal utvikling
 ```bash
@@ -88,3 +101,5 @@ Alle farger, fonter og radier er definert som variabler øverst i `src/styles.cs
 - Innmeldte feil og forslag fra publikum publiseres aldri uten at en administrator godtar dem.
 - «Bekreftet av rederiet» lagres per felt med eksakt verdi, tidspunkt fra databasen og hvem som bekreftet. Hvem som bekreftet, vises aldri offentlig.
 - Endringer basert på utdatert visning avvises (to administratorer samtidig).
+- Synkroniseringen bruker service-rollen bare i Edge Function. Nettleseren sender innloggingstoken; rollen sjekkes i databasen. Nattjobben bruker en hemmelighet i Vault.
+- Nettleseren laster aldri hele registeret: søket skjer i databasen (`search_directory`).

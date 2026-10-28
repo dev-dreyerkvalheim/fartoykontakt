@@ -8,12 +8,16 @@
 // Service-rollenøkkelen finnes bare her på serveren (miljøvariabel fra Supabase), aldri i nettleseren.
 // Skrivingen skjer i databasefunksjonene registry_* (se supabase/migrations/20261028000005_fiskeridir_sync.sql).
 import { createClient } from 'npm:@supabase/supabase-js@2.45.4';
+import postgres from 'npm:postgres@3.4.4';
 import { runSync } from './registry.js';
 
 const URL_ = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY') ?? Deno.env.get('SUPABASE_PUBLISHABLE_KEY')!;
 const admin = createClient(URL_, SERVICE_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
+// Direkte databasetilkobling (bare på serveren) for synkroniseringsfunksjonene: første import av ~5000 fartøy
+// tar lengre tid enn Supabase-API-ets grense på 8 sekunder per spørring. Grensen heves bare i denne transaksjonen.
+const sql = postgres(Deno.env.get('SUPABASE_DB_URL')!, { prepare: false, max: 1, idle_timeout: 20 });
 
 const cors = {
   'Access-Control-Allow-Origin': '*',
@@ -24,10 +28,27 @@ const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { ...cors, 'Content-Type': 'application/json' } });
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+const SAFE_NAME = /^registry_[a-z_]+$/;
 async function rpc(name: string, args: Record<string, unknown>) {
-  const { data, error } = await admin.rpc(name, args);
-  if (error) throw new Error(error.message || String(error));
-  return data;
+  if (!SAFE_NAME.test(name)) throw new Error('invalid');
+  const keys = Object.keys(args);
+  if (!keys.every((k) => /^p_[a-z_]+$/.test(k))) throw new Error('invalid');
+  // JSON sendes som tekst og gjøres om i databasen (ellers koder driveren den én gang til)
+  const isJson = keys.map((k) => args[k] !== null && typeof args[k] === 'object');
+  const params = keys.map((k, i) => {
+    const v = args[k];
+    return v === null || v === undefined ? null : isJson[i] ? JSON.stringify(v) : String(v);
+  });
+  const call = keys.map((k, i) => `${k} => $${i + 1}${isJson[i] ? '::text::jsonb' : ''}`).join(', ');
+  try {
+    return await sql.begin(async (tx) => {
+      await tx`set local statement_timeout = '180s'`;
+      const rows = await tx.unsafe(`select public.${name}(${call}) as r`, params);
+      return rows[0]?.r;
+    });
+  } catch (e) {
+    throw new Error((e as Error).message || String(e));
+  }
 }
 
 // Hvem kaller? Returnerer { trigger, actor } eller null (avvist)
