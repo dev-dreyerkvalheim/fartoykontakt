@@ -189,6 +189,7 @@ export async function runSync({ rpc, runId, mode, actor, fetchImpl = fetch, slee
     const { rows, errors } = prepareRows(vessels, kommuner);
     for (let i = 0; i < rows.length; i += 500) await rpc('registry_stage', { p_run: runId, p_rows: rows.slice(i, i + 500) });
     if (errors.length) await rpc('registry_record_errors', { p_run: runId, p_errors: errors.slice(0, 500) });
+    await rpc('registry_prepare', { p_run: runId });   // statistikk for de nye radene, ellers blir analysen treg
     let counts = await rpc('registry_analyze', { p_run: runId });
     if (mode === 'apply') counts = await rpc('registry_apply', { p_run: runId, p_actor: actor || null });
     // Navn fra Enhetsregisteret for nye rederier (feiler ikke synkroniseringen)

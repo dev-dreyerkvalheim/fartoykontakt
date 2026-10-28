@@ -19,6 +19,7 @@ await db.exec(fs.readFileSync(R + 'migrations/20261027000002_functions.sql', 'ut
 await db.exec(fs.readFileSync(R + 'migrations/20261027000003_hardening.sql', 'utf8'));
 await db.exec(fs.readFileSync(R + 'migrations/20261027000004_register_import.sql', 'utf8'));
 await db.exec(fs.readFileSync(R + 'migrations/20261028000005_fiskeridir_sync.sql', 'utf8'));
+await db.exec(fs.readFileSync(R + 'migrations/20261028000007_registry_perf.sql', 'utf8'));
 await db.exec(fs.readFileSync(R + 'seed.sql', 'utf8'));
 const U = { kari:'11111111-1111-1111-1111-111111111111', jonas:'22222222-2222-2222-2222-222222222222', per:'33333333-3333-3333-3333-333333333333', ola:'44444444-4444-4444-4444-444444444444', berg:'55555555-5555-5555-5555-555555555555' };
 for (const [n, id] of Object.entries(U)) await db.query(`insert into auth.users values ($1, $2)`, [id, n + '@eksempel.no']);

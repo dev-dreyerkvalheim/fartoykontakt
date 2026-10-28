@@ -14,7 +14,7 @@ create function auth.uid() returns uuid language sql stable as $$ select nullif(
 create function auth.jwt() returns jsonb language sql stable as $$ select coalesce(nullif(current_setting('request.jwt.claims', true), ''), '{}')::jsonb $$;
 create role anon; create role authenticated; create role service_role bypassrls;
 `);
-for (const f of ['20261027000001_schema.sql', '20261027000002_functions.sql', '20261027000003_hardening.sql', '20261027000004_register_import.sql', '20261028000005_fiskeridir_sync.sql'])
+for (const f of ['20261027000001_schema.sql', '20261027000002_functions.sql', '20261027000003_hardening.sql', '20261027000004_register_import.sql', '20261028000005_fiskeridir_sync.sql', '20261028000007_registry_perf.sql'])
   await db.exec(fs.readFileSync(R + 'migrations/' + f, 'utf8'));
 await db.exec(`grant usage on schema public, extensions to anon, authenticated, service_role;
   grant select on all tables in schema public to anon, authenticated;
