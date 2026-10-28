@@ -70,11 +70,11 @@ ok(err && err.includes('Uventet format'), 'Endret svarformat oppdages');
 // ---- Hele kjeden mot lokal database
 const R = fileURLToPath(new URL('../supabase/', import.meta.url));
 const db = new PGlite({ extensions: { pg_trgm } });
-await db.exec(`create schema auth; create table auth.users(id uuid primary key, email text);
+await db.exec(`create schema auth; create table auth.users(id uuid primary key, email text, email_confirmed_at timestamptz);
 create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
 create function auth.jwt() returns jsonb language sql stable as $$ select coalesce(nullif(current_setting('request.jwt.claims', true), ''), '{}')::jsonb $$;
 create role anon; create role authenticated; create role service_role bypassrls;`);
-for (const f of ['20261027000001_schema.sql', '20261027000002_functions.sql', '20261027000003_hardening.sql', '20261027000004_register_import.sql', '20261028000005_fiskeridir_sync.sql', '20261028000007_registry_perf.sql', '20261028000008_acting_role.sql', '20261028000009_company_managers.sql', '20261028000010_manager_badge.sql'])
+for (const f of ['20261027000001_schema.sql', '20261027000002_functions.sql', '20261027000003_hardening.sql', '20261027000004_register_import.sql', '20261028000005_fiskeridir_sync.sql', '20261028000007_registry_perf.sql', '20261028000008_acting_role.sql', '20261028000009_company_managers.sql', '20261028000010_manager_badge.sql', '20261028000011_membership_invites.sql'])
   await db.exec(fs.readFileSync(R + 'migrations/' + f, 'utf8'));
 await db.exec(`grant usage on schema public, extensions to service_role; grant all on all tables in schema public to service_role; grant usage on all sequences in schema public to service_role;
   insert into auth.users values ('44444444-4444-4444-4444-444444444444', 'ola@eksempel.no'); select make_platform_admin('ola@eksempel.no', 'Ola');`);

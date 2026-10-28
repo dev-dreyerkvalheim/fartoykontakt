@@ -12,11 +12,11 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++; };
 
 const pg = new PGlite({ extensions: { pg_trgm } });
-await pg.exec(`create schema auth; create table auth.users(id uuid primary key, email text);
+await pg.exec(`create schema auth; create table auth.users(id uuid primary key, email text, email_confirmed_at timestamptz);
 create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
 create function auth.jwt() returns jsonb language sql stable as $$ select coalesce(nullif(current_setting('request.jwt.claims', true), ''), '{}')::jsonb $$;
 create role anon; create role authenticated; create role service_role bypassrls;`);
-for (const f of ['migrations/20261027000001_schema.sql', 'migrations/20261027000002_functions.sql', 'migrations/20261027000003_hardening.sql', 'seed.sql', 'migrations/20261027000004_register_import.sql', 'migrations/20261028000005_fiskeridir_sync.sql', 'migrations/20261028000007_registry_perf.sql', 'migrations/20261028000008_acting_role.sql', 'migrations/20261028000009_company_managers.sql', 'migrations/20261028000010_manager_badge.sql']) await pg.exec(fs.readFileSync(R + f, 'utf8'));
+for (const f of ['migrations/20261027000001_schema.sql', 'migrations/20261027000002_functions.sql', 'migrations/20261027000003_hardening.sql', 'seed.sql', 'migrations/20261027000004_register_import.sql', 'migrations/20261028000005_fiskeridir_sync.sql', 'migrations/20261028000007_registry_perf.sql', 'migrations/20261028000008_acting_role.sql', 'migrations/20261028000009_company_managers.sql', 'migrations/20261028000010_manager_badge.sql', 'migrations/20261028000011_membership_invites.sql']) await pg.exec(fs.readFileSync(R + f, 'utf8'));
 const U = { kari:'11111111-1111-1111-1111-111111111111', jonas:'22222222-2222-2222-2222-222222222222', ola:'44444444-4444-4444-4444-444444444444', ny:'66666666-6666-6666-6666-666666666666', per:'77777777-7777-7777-7777-777777777777' };
 for (const [n, id] of Object.entries(U)) await pg.query(`insert into auth.users values ($1,$2)`, [id, n + '@eksempel.no']);
 await pg.exec(`select grant_membership('kari@eksempel.no','froyanes','admin','Kari Nordvik'); select grant_membership('jonas@eksempel.no','froyanes','member','Jonas Vik'); select make_platform_admin('ola@eksempel.no','Ola Drift');`);

@@ -33,6 +33,8 @@ Siden har to modi:
    7. `supabase/migrations/20261028000007_registry_perf.sql`
    8. `supabase/migrations/20261028000008_acting_role.sql` (rollevelger)
    9. `supabase/migrations/20261028000009_company_managers.sql` (forvaltning/management)
+   10. `supabase/migrations/20261028000010_manager_badge.sql`
+   11. `supabase/migrations/20261028000011_membership_invites.sql` (forhåndsgodkjent tilgang)
 
    `supabase/seed.sql` inneholder oppdiktede demofartøy og brukes bare i testene og ved lokal utvikling. Ikke kjør den i produksjon.
 3. Gå til **Authentication → URL Configuration**:
@@ -61,6 +63,12 @@ Be testeren logge inn én gang. Kjør så:
 select grant_membership('tester@firma.no', 'org-998076803', 'admin', 'Navn Navnesen');
 ```
 Rederier fra registeret har id `org-<organisasjonsnummer>`. Søknader om tilgang ligger i tabellen `access_requests`.
+
+Har personen ikke logget inn ennå, kan tilgangen gis på forhånd (som plattformadministrator, eller i SQL Editor med `request.jwt.claim.sub` satt til en plattformadministrator):
+```sql
+select invite_member('kari@firma.no', 'org-998076803', 'admin', 'Kari Nordvik');
+```
+Tilgangen opprettes automatisk første gang personen bekrefter e-postadressen med innloggingslenken. Åpne invitasjoner ligger i `membership_invites` og kan trekkes tilbake med `revoke_invite(id)`.
 
 ### 5. Plattformadministrator som også er med i et rederi
 En plattformadministrator kan også få tilgang til et rederi med `grant_membership`. Da vises **«Du jobber som»** øverst på *Mine fartøy*:

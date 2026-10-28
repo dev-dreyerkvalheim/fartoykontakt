@@ -9,7 +9,7 @@ let fails = 0; const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); 
 // Etterligner Supabase sin auth-del
 await db.exec(`
 create schema auth;
-create table auth.users(id uuid primary key, email text);
+create table auth.users(id uuid primary key, email text, email_confirmed_at timestamptz);
 create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
 create function auth.jwt() returns jsonb language sql stable as $$ select coalesce(nullif(current_setting('request.jwt.claims', true), ''), '{}')::jsonb $$;
 create role anon; create role authenticated; create role service_role bypassrls;
@@ -23,6 +23,7 @@ await db.exec(fs.readFileSync(R + 'migrations/20261028000007_registry_perf.sql',
 await db.exec(fs.readFileSync(R + 'migrations/20261028000008_acting_role.sql', 'utf8'));
 await db.exec(fs.readFileSync(R + 'migrations/20261028000009_company_managers.sql', 'utf8'));
 await db.exec(fs.readFileSync(R + 'migrations/20261028000010_manager_badge.sql', 'utf8'));
+await db.exec(fs.readFileSync(R + 'migrations/20261028000011_membership_invites.sql', 'utf8'));
 await db.exec(fs.readFileSync(R + 'seed.sql', 'utf8'));
 const U = { kari:'11111111-1111-1111-1111-111111111111', jonas:'22222222-2222-2222-2222-222222222222', per:'33333333-3333-3333-3333-333333333333', ola:'44444444-4444-4444-4444-444444444444', berg:'55555555-5555-5555-5555-555555555555' };
 for (const [n, id] of Object.entries(U)) await db.query(`insert into auth.users values ($1, $2)`, [id, n + '@eksempel.no']);
@@ -244,6 +245,28 @@ await as(null);
 ok((await one(`select count(*)::int n from company_manager_log where action='removed' and note='Avtale avsluttet'`)).n === 1, 'Forvaltning: fjerning logget');
 await db.exec(`delete from company_managers; delete from memberships where user_id='${U.mona}'`);
 
+// Forhåndsgodkjent tilgang (invitasjon)
+await as('kari'); ok((await call(`select invite_member('nina@eksempel.no','froyanes','member','Nina Ny')`)).err === 'forbidden', 'Invitasjon: bare plattformadministrator');
+await as('ola');
+ok((await one(`select invite_member(' Nina@Eksempel.no ','froyanes','member','Nina Ny') r`)).r.status === 'invited', 'Invitasjon: lagret for e-post uten bruker');
+ok((await one(`select invite_member('nina@eksempel.no','froyanes','admin','Nina Ny') r`)).r.status === 'invited' && (await one(`select count(*)::int n from membership_invites where accepted_at is null`)).n === 1, 'Invitasjon: ingen duplikater, rollen oppdateres');
+ok((await call(`select invite_member('ikke-epost','froyanes','member','X')`)).err === 'invalid' && (await call(`select invite_member('a@b.no','finnes-ikke','member','X')`)).err === 'notfound', 'Invitasjon: ugyldig e-post og rederi avvises');
+U.nina = '99999999-9999-9999-9999-999999999999';
+await as(null); await db.query(`insert into auth.users(id, email) values ($1, 'nina@eksempel.no')`, [U.nina]);
+ok((await one(`select count(*)::int n from memberships where user_id=$1`, [U.nina])).n === 0, 'Invitasjon: ingen tilgang før e-posten er bekreftet');
+await db.query(`update auth.users set email_confirmed_at = now() where id=$1`, [U.nina]);
+const nm1 = await one(`select role, full_name from memberships where user_id=$1 and company_id='froyanes'`, [U.nina]);
+ok(nm1?.role === 'admin' && nm1.full_name === 'Nina Ny' && (await one(`select accepted_user from membership_invites where lower(email)='nina@eksempel.no'`)).accepted_user === U.nina, 'Invitasjon: tilgang opprettet ved første innlogging');
+await as('nina'); ok((await one(`select my_context() c`)).c.companyId === 'froyanes', 'Invitasjon: Nina har tilgang med en gang');
+await as('ola');
+ok((await one(`select invite_member('nina@eksempel.no','bergholm','member','Nina Ny') r`)).r.status === 'granted', 'Invitasjon: eksisterende bekreftet bruker får tilgang med en gang');
+await one(`select invite_member('vera@eksempel.no','froyanes','member','Vera') r`);
+const vid = (await one(`select id from membership_invites where email='vera@eksempel.no'`)).id;
+await call(`select revoke_invite($1)`, [vid]);
+await as(null); await db.query(`insert into auth.users values ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', 'vera@eksempel.no', now())`);
+ok((await one(`select count(*)::int n from memberships where email='vera@eksempel.no'`)).n === 0, 'Invitasjon: tilbaketrukket invitasjon gir ikke tilgang');
+await db.exec(`delete from memberships where email in ('nina@eksempel.no','vera@eksempel.no')`);
+
 await db.query(`insert into acting_roles(user_id, company_id) values ($1, null)`, [U.ola]);
 // RLS: direkte tabellesing som anon
 await db.exec(`grant usage on schema public to anon, authenticated; grant select on all tables in schema public to anon, authenticated;`);
@@ -251,6 +274,7 @@ await as(null); await db.exec(`set role anon`);
 ok((await db.query(`select count(*)::int n from verifications`)).rows[0].n === 0, 'RLS: anon kan ikke lese bekreftelser direkte');
 ok((await db.query(`select count(*)::int n from acting_roles`)).rows[0].n === 0, 'RLS: anon kan ikke lese rollevalg');
 ok((await db.query(`select count(*)::int n from company_manager_log`)).rows[0].n === 0, 'RLS: anon kan ikke lese forvaltningsloggen');
+ok((await db.query(`select count(*)::int n from membership_invites`)).rows[0].n === 0, 'RLS: anon kan ikke lese invitasjoner');
 
 let rr = ''; try { rr = (await db.query(`select count(*)::int n from reports`)).rows[0].n; } catch (e) { rr = 'nektet'; }
 ok(rr === 0 || rr === 'nektet', 'RLS: anon kan ikke lese meldinger (' + rr + ')');
